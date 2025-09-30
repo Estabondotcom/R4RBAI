@@ -8,7 +8,8 @@ const state = {
   ]},
   inv: [{name:"Glider cloak",qty:1},{name:"Lockpicks",qty:1},{name:"Rations",qty:2}],
   rollPending:null,
-  testRolling:false // NEW: test mode flag
+  testRolling:false,   // persistent test-mode
+  testDC:14            // default test difficulty
 };
 
 // ---------- DOM refs ----------
@@ -87,12 +88,13 @@ function postDock(role, text){
 }
 function escapeHtml(s){ return s.replace(/[&<>]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
 
-// ---------- COMMANDS ----------
+// ---------- COMMANDS (supports optional numeric arg for togglerolling) ----------
 function handleCommand(raw){
-  // expects *command* exactly
-  const m = raw.match(/^\*(\w+)\*$/i);
+  // pattern: *command* or *command 18*
+  const m = raw.match(/^\*(\w+)(?:\s+(\d+))?\*$/i);
   if(!m) return false;
   const cmd = m[1].toLowerCase();
+  const arg = m[2] ? parseInt(m[2],10) : undefined;
 
   const clamp = (v,min,max)=> Math.max(min, Math.min(max, v));
 
@@ -126,50 +128,60 @@ function handleCommand(raw){
       return true;
     }
     case 'togglerolling': {
+      if (arg) state.testDC = arg;
       state.testRolling = !state.testRolling;
-      if(state.testRolling){
-        state.rollPending = { skill:'Test', difficulty:14 }; // generic DC
-        rollHint.style.display='inline-block';
-        postDock('system', 'Test rolling: ON — tap any Skill’s “Roll” to test vs DC 14. (No narration in test mode.)');
+      if (state.testRolling) {
+        state.rollPending = { skill:'Test', difficulty: state.testDC };
+        rollHint.style.display = 'inline-block';
+        postDock('system', `Test rolling: ON — tap any Skill’s “Roll” to test vs DC ${state.testDC}. (No narration in test mode.)`);
       } else {
         state.rollPending = null;
-        rollHint.style.display='none';
+        rollHint.style.display = 'none';
         postDock('system', 'Test rolling: OFF');
       }
       return true;
     }
     default:
       postDock('system', `Unknown command: ${cmd}`);
-      return true; // treat as handled to avoid sending to AI
+      return true; // treat as handled so we don't send to AI
   }
 }
 
-// ---------- Roll flow (client-authoritative for demo) ----------
+// ---------- Roll flow (persistent re-arming in test mode) ----------
 function triggerRoll(s){
-  if(!state.rollPending){
+  // If test mode is on, always ensure a pending roll exists
+  if (state.testRolling && !state.rollPending) {
+    state.rollPending = { skill:'Test', difficulty: state.testDC };
+    rollHint.style.display = 'inline-block';
+  }
+
+  if (!state.rollPending) {
     postDock('system', 'No roll requested right now.');
     return;
   }
+
   const dice = s.tier + (state.rollPending.aid||0);
   let raw=[], explosions=0, total=0;
   function rollD6(){ const r = Math.floor(Math.random()*6)+1; raw.push(r); total+=r; if(r===6){ explosions++; rollD6(); } }
   for(let i=0;i<dice;i++) rollD6();
+
   const dc = state.rollPending.difficulty;
   const tierResult = total >= dc+6 ? 'crit' : total >= dc ? 'success' : total >= dc-4 ? 'mixed' : 'fail';
   const rollObj = {skill:s.name,tier:s.tier,dc,raw,explosions,total,tierResult};
 
-  rollHint.style.display='none';
-  state.rollPending = null;
-
   postDock('roll', `Rolled ${s.name} ${s.tier}d6 → [${raw.join(',')}] total ${total} vs DC ${dc} → ${tierResult}`);
 
-  // In test mode we stop here (no AI narration).
-  if(state.testRolling){
-    postDock('system','(Test mode) Roll complete — no narration.');
-    return;
+  if (state.testRolling) {
+    // Keep test mode armed for the next tap
+    state.rollPending = { skill:'Test', difficulty: state.testDC };
+    rollHint.style.display = 'inline-block';
+    postDock('system','(Test mode) Roll complete — tap another Skill to roll again.');
+    return; // no narration in test mode
   }
 
-  // Normal flow: send to AI (simulated here)
+  // Normal flow (non-test): clear the pending and continue
+  rollHint.style.display = 'none';
+  state.rollPending = null;
   fakeAiTurn({ player_input:'Resolve the action.', mechanics:{roll_result:rollObj} });
 }
 
@@ -239,7 +251,7 @@ document.getElementById('sendBtn').onclick = ()=>{
   postDock('you', v);
   input.value='';
   if(state.rollPending){
-    postDock('system','A roll is pending. Tap the matching skill in the tray.');
+    postDock('system','A roll is pending. Tap the matching Skill in the tray.');
     return;
   }
   fakeAiTurn({ state_summary:{}, recent_turns:[], mechanics:{}, player_input:v });
