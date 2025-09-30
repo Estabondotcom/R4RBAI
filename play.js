@@ -80,17 +80,18 @@ function typewriter(str, node, speed=12, done){
 }
 
 // ---------- Chat Dock ----------
-function postDock(role, text){
+function postDock(role, html){
   const div = document.createElement('div'); div.className='msg';
-  div.innerHTML = `<span class='tag'>[${role}]</span>${escapeHtml(text)}`;
+  if(role === 'roll-html'){ div.innerHTML = html; }
+  else { div.innerHTML = `<span class='tag'>[${role}]</span>${escapeHtml(html)}`; }
   dockEl.appendChild(div);
   dockEl.scrollTop = dockEl.scrollHeight;
+  return div;
 }
 function escapeHtml(s){ return s.replace(/[&<>]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
 
 // ---------- COMMANDS (supports optional numeric arg for togglerolling) ----------
 function handleCommand(raw){
-  // pattern: *command* or *command 18*
   const m = raw.match(/^\*(\w+)(?:\s+(\d+))?\*$/i);
   if(!m) return false;
   const cmd = m[1].toLowerCase();
@@ -143,13 +144,82 @@ function handleCommand(raw){
     }
     default:
       postDock('system', `Unknown command: ${cmd}`);
-      return true; // treat as handled so we don't send to AI
+      return true;
   }
+}
+
+// ---------- Helpers for roll math ----------
+function tierFrom(total, dc){
+  if (total >= dc+6) return 'crit';
+  if (total >= dc) return 'success';
+  if (total >= dc-4) return 'mixed';
+  return 'fail';
+}
+function rollExplodingOnce(){
+  const first = Math.floor(Math.random()*6)+1;
+  let extras = [];
+  let last = first;
+  while(last===6){
+    const n = Math.floor(Math.random()*6)+1;
+    extras.push(n);
+    last = n;
+  }
+  return { first, extras };
+}
+
+// ---------- Render roll message with unlimited Luck + Resolve ----------
+function postRollMessage(rollObj, {allowResolve=true}={}){
+  const render = ()=>{
+    const tierNow = tierFrom(rollObj.total, rollObj.dc);
+    const baseText = `Rolled <b>${escapeHtml(rollObj.skill)}</b> ${rollObj.tier}d6 → [${rollObj.raw.join(', ')}] total <b>${rollObj.total}</b> vs DC <b>${rollObj.dc}</b> → <b>${tierNow}</b>`;
+    const controls = `<div class="tiny" style="margin-top:4px;">
+      <button class="spendLuckBtn"${state.pc.luck<=0?' disabled':''}>Spend Luck (reroll lowest)</button>
+      ${allowResolve ? '<button class="resolveBtn" style="margin-left:6px;">Resolve</button>' : ''}
+    </div>`;
+    div.innerHTML = `<span class='tag'>[roll]</span>${baseText}${controls}`;
+    bind();
+  };
+
+  const div = postDock('roll-html', '');
+  const bind = ()=>{
+    const spendBtn = div.querySelector('.spendLuckBtn');
+    const resolveBtn = div.querySelector('.resolveBtn');
+
+    if (spendBtn){
+      spendBtn.onclick = ()=>{
+        if(state.pc.luck<=0){ postDock('system','No Luck available.'); return; }
+        // Spend 1 Luck
+        state.pc.luck = Math.max(0, state.pc.luck - 1);
+        renderHealth();
+        // Find lowest die (first occurrence)
+        let minVal = Infinity, minIdx = -1;
+        for(let i=0;i<rollObj.raw.length;i++){
+          if(rollObj.raw[i] < minVal){ minVal = rollObj.raw[i]; minIdx = i; }
+        }
+        const { first:newVal, extras } = rollExplodingOnce();
+        rollObj.raw[minIdx] = newVal;
+        if(extras.length) rollObj.raw.push(...extras);
+        rollObj.total = rollObj.total - minVal + newVal + extras.reduce((a,b)=>a+b,0);
+        render(); // re-render with updated numbers; button stays enabled if Luck remains
+      };
+    }
+
+    if (allowResolve && resolveBtn){
+      resolveBtn.onclick = ()=>{
+        fakeAiTurn({ player_input:'Resolve the action.', mechanics:{ roll_result: rollObj } });
+        // After resolving, disable both buttons for this message
+        if(spendBtn) spendBtn.disabled = true;
+        resolveBtn.disabled = true;
+      };
+    }
+  };
+
+  render();
+  return div;
 }
 
 // ---------- Roll flow (persistent re-arming in test mode) ----------
 function triggerRoll(s){
-  // If test mode is on, always ensure a pending roll exists
   if (state.testRolling && !state.rollPending) {
     state.rollPending = { skill:'Test', difficulty: state.testDC };
     rollHint.style.display = 'inline-block';
@@ -166,23 +236,20 @@ function triggerRoll(s){
   for(let i=0;i<dice;i++) rollD6();
 
   const dc = state.rollPending.difficulty;
-  const tierResult = total >= dc+6 ? 'crit' : total >= dc ? 'success' : total >= dc-4 ? 'mixed' : 'fail';
+  const tierResult = tierFrom(total, dc);
   const rollObj = {skill:s.name,tier:s.tier,dc,raw,explosions,total,tierResult};
 
-  postDock('roll', `Rolled ${s.name} ${s.tier}d6 → [${raw.join(',')}] total ${total} vs DC ${dc} → ${tierResult}`);
-
   if (state.testRolling) {
-    // Keep test mode armed for the next tap
+    postRollMessage(rollObj, {allowResolve:false});
     state.rollPending = { skill:'Test', difficulty: state.testDC };
     rollHint.style.display = 'inline-block';
-    postDock('system','(Test mode) Roll complete — tap another Skill to roll again.');
-    return; // no narration in test mode
+    postDock('system','(Test mode) Roll complete — tap another Skill to roll again, or keep spending Luck on the latest roll.');
+    return;
   }
 
-  // Normal flow (non-test): clear the pending and continue
   rollHint.style.display = 'none';
   state.rollPending = null;
-  fakeAiTurn({ player_input:'Resolve the action.', mechanics:{roll_result:rollObj} });
+  postRollMessage(rollObj, {allowResolve:true});
 }
 
 // ---------- Simulated AI (replace with real API later) ----------
@@ -244,10 +311,8 @@ const input = document.getElementById('userInput');
 document.getElementById('sendBtn').onclick = ()=>{
   const v = input.value.trim(); if(!v) return;
 
-  // Commands intercept
   if(handleCommand(v)){ input.value=''; return; }
 
-  // Normal message
   postDock('you', v);
   input.value='';
   if(state.rollPending){
