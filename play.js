@@ -21,7 +21,7 @@ const tray = document.getElementById('tray');
 document.getElementById('trayToggle').onclick = ()=> tray.classList.toggle('open');
 
 document.getElementById('tabs').onclick = (e)=>{
-  if(e.target.tagName!=="BUTTON") return;
+  if(e.target.tagName!=='BUTTON') return;
   [...document.querySelectorAll('.tabs button')].forEach(b=>b.classList.remove('active'));
   e.target.classList.add('active');
   const map = {skills:'panel-skills',inv:'panel-inv',health:'panel-health'};
@@ -36,7 +36,7 @@ function renderSkills(){
     const row = document.createElement('div'); row.className='skill';
     row.innerHTML = `<span class="name">${s.name}</span>
       <span class="pill">${s.tier}d6</span>
-      <button data-skill="${s.name}">Roll</button>`;
+      <button data-skill='${s.name}'>Roll</button>`;
     row.querySelector('button').onclick = ()=> triggerRoll(s);
     wrap.appendChild(row);
   });
@@ -80,7 +80,7 @@ function typewriter(str, node, speed=12, done){
 // ---------- Chat Dock ----------
 function postDock(role, text){
   const div = document.createElement('div'); div.className='msg';
-  div.innerHTML = `<span class="tag">[${role}]</span>${escapeHtml(text)}`;
+  div.innerHTML = `<span class='tag'>[${role}]</span>${escapeHtml(text)}`;
   dockEl.appendChild(div);
   dockEl.scrollTop = dockEl.scrollHeight;
 }
@@ -176,5 +176,5 @@ input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.p
 // ---------- Kickoff ----------
 window.addEventListener('load', ()=>{
   setTimeout(()=>{ document.getElementById('tray').classList.add('open'); setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200); }, 400);
-  fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:"Begin the adventure." });
+  fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:'Begin the adventure.' });
 });
