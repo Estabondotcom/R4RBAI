@@ -8,7 +8,10 @@ const state = {
   ]},
   inv: [{name:"Glider cloak",qty:1},{name:"Lockpicks",qty:1},{name:"Rations",qty:2}],
   rollPending:null,
-  testRolling:false // NEW: test mode flag
+  testRolling:false, // test mode flag
+  // track last completed roll for Luck reroll
+  // activeRoll = { skill, tier, dc, raw:[...], explosions, total, tierResult, rerolled:false }
+  activeRoll: null
 };
 
 // ---------- DOM refs ----------
@@ -21,6 +24,8 @@ const scrollLock = document.getElementById('scrollLock');
 const tray = document.getElementById('tray');
 document.getElementById('trayToggle').onclick = ()=> tray.classList.toggle('open');
 
+// (kept your original handler; works fine as long as button has no inner spans)
+// you can swap to closest('button[data-tab]') if needed
 document.getElementById('tabs').onclick = (e)=>{
   if(e.target.tagName!=='BUTTON') return;
   [...document.querySelectorAll('.tabs button')].forEach(b=>b.classList.remove('active'));
@@ -30,17 +35,39 @@ document.getElementById('tabs').onclick = (e)=>{
   document.getElementById(map[e.target.dataset.tab]).style.display='block';
 };
 
+// ---------- Luck Reroll helpers ----------
+function canRerollForSkill(skillName){
+  const r = state.activeRoll;
+  return !!r && r.skill === skillName && !r.rerolled && state.pc.luck > 0;
+}
+function updateRerollButtons(){
+  document.querySelectorAll('.skill button[data-reroll]').forEach(btn=>{
+    const skillName = btn.getAttribute('data-reroll');
+    const ok = canRerollForSkill(skillName);
+    btn.disabled = !ok;
+    btn.title = ok
+      ? 'Spend 1 Luck to reroll the single lowest die'
+      : 'Requires a recent roll for this skill, unused reroll, and at least 1 Luck';
+  });
+}
+
+// ---------- Rendering ----------
 function renderSkills(){
   const wrap = document.getElementById('panel-skills');
   wrap.innerHTML = '';
   state.pc.skills.forEach(s=>{
     const row = document.createElement('div'); row.className='skill';
-    row.innerHTML = `<span class="name">${s.name}</span>
+    row.innerHTML = `
+      <span class="name">${s.name}</span>
       <span class="pill">${s.tier}d6</span>
-      <button data-skill='${s.name}'>Roll</button>`;
-    row.querySelector('button').onclick = ()=> triggerRoll(s);
+      <button data-skill='${s.name}'>Roll</button>
+      <button data-reroll='${s.name}' disabled>Reroll (Luck)</button>
+    `;
+    row.querySelector('button[data-skill]').onclick = ()=> triggerRoll(s);
+    row.querySelector('button[data-reroll]').onclick = ()=> rerollLowestForSkill(s.name);
     wrap.appendChild(row);
   });
+  updateRerollButtons();
 }
 function renderInv(){
   document.getElementById('invList').innerHTML = state.inv.map(i=>`• ${i.name} ×${i.qty}`).join('<br/>');
@@ -101,6 +128,7 @@ function handleCommand(raw){
       const before = state.pc.luck;
       state.pc.luck = clamp(state.pc.luck + 1, 0, 5);
       renderHealth();
+      updateRerollButtons(); // keep buttons in sync
       postDock('system', `Luck ${before!==state.pc.luck?'+1':'(max)'} — ${state.pc.luck}/5`);
       return true;
     }
@@ -108,6 +136,7 @@ function handleCommand(raw){
       const before = state.pc.luck;
       state.pc.luck = clamp(state.pc.luck - 1, 0, 5);
       renderHealth();
+      updateRerollButtons(); // keep buttons in sync
       postDock('system', `Luck ${before!==state.pc.luck?'-1':'(min)'} — ${state.pc.luck}/5`);
       return true;
     }
@@ -136,6 +165,7 @@ function handleCommand(raw){
         rollHint.style.display='none';
         postDock('system', 'Test rolling: OFF');
       }
+      updateRerollButtons();
       return true;
     }
     default:
@@ -152,16 +182,28 @@ function triggerRoll(s){
   }
   const dice = s.tier + (state.rollPending.aid||0);
   let raw=[], explosions=0, total=0;
-  function rollD6(){ const r = Math.floor(Math.random()*6)+1; raw.push(r); total+=r; if(r===6){ explosions++; rollD6(); } }
+
+  function rollD6(){
+    const r = Math.floor(Math.random()*6)+1;
+    raw.push(r); total+=r;
+    if(r===6){ explosions++; rollD6(); }
+  }
   for(let i=0;i<dice;i++) rollD6();
+
   const dc = state.rollPending.difficulty;
   const tierResult = total >= dc+6 ? 'crit' : total >= dc ? 'success' : total >= dc-4 ? 'mixed' : 'fail';
-  const rollObj = {skill:s.name,tier:s.tier,dc,raw,explosions,total,tierResult};
+  const rollObj = {skill:s.name,tier:s.tier,dc,raw,explosions,total,tierResult, rerolled:false};
 
   rollHint.style.display='none';
   state.rollPending = null;
 
+  // record the roll for possible Luck reroll
+  state.activeRoll = rollObj;
+
   postDock('roll', `Rolled ${s.name} ${s.tier}d6 → [${raw.join(',')}] total ${total} vs DC ${dc} → ${tierResult}`);
+
+  // refresh reroll buttons
+  updateRerollButtons();
 
   // In test mode we stop here (no AI narration).
   if(state.testRolling){
@@ -171,6 +213,65 @@ function triggerRoll(s){
 
   // Normal flow: send to AI (simulated here)
   fakeAiTurn({ player_input:'Resolve the action.', mechanics:{roll_result:rollObj} });
+}
+
+// ---------- Luck reroll (single lowest die, no explosions) ----------
+function rerollLowestForSkill(skillName){
+  const r = state.activeRoll;
+  if(!r || r.skill !== skillName){
+    postDock('system','No eligible roll to reroll for this skill.');
+    return;
+  }
+  if(r.rerolled){
+    postDock('system','You already used a Luck reroll for this roll.');
+    return;
+  }
+  if(state.pc.luck <= 0){
+    postDock('system','No Luck remaining.');
+    return;
+  }
+
+  if(!Array.isArray(r.raw) || r.raw.length === 0){
+    postDock('system','No dice to reroll.');
+    return;
+  }
+
+  // find first occurrence of the minimum
+  const minVal = Math.min(...r.raw);
+  const idx = r.raw.indexOf(minVal);
+
+  // spend 1 Luck
+  state.pc.luck = Math.max(0, state.pc.luck - 1);
+  renderHealth();
+
+  // reroll a single d6 (no explosions on Luck reroll)
+  const newVal = Math.floor(Math.random()*6) + 1;
+
+  // replace
+  r.raw[idx] = newVal;
+
+  // recompute totals/outcome
+  r.total = r.raw.reduce((a,b)=>a+b,0);
+  const dc = r.dc;
+  r.tierResult = r.total >= dc+6 ? 'crit'
+               : r.total >= dc ? 'success'
+               : r.total >= dc-4 ? 'mixed'
+               : 'fail';
+  r.rerolled = true;
+
+  postDock('roll', `Luck reroll → replaced lowest ${minVal} with ${newVal}; new total ${r.total} vs DC ${dc} → ${r.tierResult}`);
+
+  // update button states after spending Luck and consuming reroll
+  updateRerollButtons();
+
+  // In test mode we stop here.
+  if(state.testRolling){
+    postDock('system','(Test mode) Reroll complete — no narration.');
+    return;
+  }
+
+  // Normal flow: ask AI to resolve with updated roll
+  fakeAiTurn({ player_input:'Resolve the action (after Luck reroll).', mechanics:{ roll_result: r } });
 }
 
 // ---------- Simulated AI (replace with real API later) ----------
@@ -251,4 +352,3 @@ window.addEventListener('load', ()=>{
   setTimeout(()=>{ document.getElementById('tray').classList.add('open'); setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200); }, 400);
   fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:'Begin the adventure.' });
 });
-
