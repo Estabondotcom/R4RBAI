@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>R4RB — Campaigns</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .wrap{max-width:960px;margin:4vh auto;padding:8px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:12px}
+    .card{background:#14120e;border:1px solid #2b2923;border-radius:14px;padding:12px}
+    .card h3{margin:0 0 6px;color:#eadfcb;font-size:1.05rem}
+    .muted{color:#a59e91}
+    .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+    input, textarea, select{width:100%;padding:10px;border-radius:10px;border:1px solid #2c2a25;background:#0f0e0b;color:#efeae0}
+    textarea{min-height:72px;resize:vertical}
+    button{border:1px solid #3b3428;background:linear-gradient(#2b261f,#201c16);color:#f0e7d8;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
+    .empty{border:1px dashed #2b2923;border-radius:12px;padding:16px;text-align:center;color:#9a917f}
+    .badge{font-size:.78rem;border:1px solid #3b3428;border-radius:999px;padding:.1rem .5rem;color:#cdbfa6}
+    .danger{border-color:#5a2b2b}
+    .section-title{color:#cdbfa6;margin:10px 0 6px;font-size:.9rem}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="row">
+      <h2 style="margin:0;color:#eadfcb">Your Campaigns</h2>
+      <div>
+        <button id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+
+    <div id="campaignList" class="grid"></div>
+
+    <h2 class="section-title">Create a new campaign</h2>
+    <div class="card">
+      <div class="grid" style="grid-template-columns: repeat(auto-fit,minmax(220px,1fr));">
+        <div><label class="muted tiny">Campaign name</label><input id="c_name" placeholder="Emberquay Heist"/></div>
+        <div><label class="muted tiny">Theme</label><input id="c_theme" placeholder="Gaslamp caper"/></div>
+        <div><label class="muted tiny">Setting</label><input id="c_setting" placeholder="Floating canal city"/></div>
+        <div><label class="muted tiny">Character name</label><input id="c_charname" placeholder="Rin Kestrel"/></div>
+      </div>
+      <div style="margin-top:8px">
+        <label class="muted tiny">Story premise</label>
+        <textarea id="c_premise" placeholder="A courier flees with a prototype; rival crews and sky-patrol close in..."></textarea>
+      </div>
+      <div style="margin-top:8px">
+        <label class="muted tiny">Character description</label>
+        <textarea id="c_chardesc" placeholder="Nervy rooftop runner; hates deep water; a knack for improvisation."></textarea>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="muted tiny">We’ll save this under your account.</span>
+        <button id="createBtn">Create campaign</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Require auth -->
+  <script type="module" src="auth-guard.js"></script>
+  <!-- Campaign logic -->
+  <script type="module" src="campaigns.js"></script>
+</body>
+</html>

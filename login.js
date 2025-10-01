@@ -1,14 +1,4 @@
-// Firebase Login + Firestore bootstrap + redirect handling
-const firebaseConfig = {
-  apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
-  authDomain: "r4rbai.firebaseapp.com",
-  projectId: "r4rbai",
-  storageBucket: "r4rbai.firebasestorage.app",
-  messagingSenderId: "289173907451",
-  appId: "1:289173907451:web:86afa1cc2b0610bf56cd5e",
-  measurementId: "G-G0MSMZ3C9X"
-};
-
+import { firebaseConfig } from './firebaseConfigShim.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import { getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged,
          signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
@@ -22,7 +12,7 @@ const $ = (id)=>document.getElementById(id);
 const statusEl = $('status'), errEl = $('err'), okEl = $('ok');
 
 const params = new URLSearchParams(location.search);
-const nextUrl = params.get('next');  // set by auth-guard if user tried to open a protected page
+const nextUrl = params.get('next');
 
 function setStatus(msg){ statusEl.textContent = msg || ''; }
 function setErr(msg){ errEl.style.display = msg ? 'block' : 'none'; errEl.textContent = msg||''; }
@@ -37,7 +27,7 @@ async function ensureUserDoc(user){
 }
 
 function goNext(){
-  const defaultDest = 'play.html';
+  const defaultDest = 'campaigns.html';
   location.href = nextUrl ? decodeURIComponent(nextUrl) : defaultDest;
 }
 
@@ -52,7 +42,6 @@ async function handleSignIn(){
     setOk('Signed in! Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
-
 async function handleSignUp(){
   setErr(''); setOk(''); setStatus('Creating account…');
   try {
@@ -64,7 +53,6 @@ async function handleSignUp(){
     setOk('Account created! Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
-
 async function handleGuest(){
   setErr(''); setOk(''); setStatus('Continuing as guest…');
   try {
@@ -79,7 +67,7 @@ $('signinBtn').onclick = handleSignIn;
 $('signupBtn').onclick = handleSignUp;
 $('guestBtn').onclick = handleGuest;
 
-onAuthStateChanged(auth, (user)=>{ if(user) goNext(); });
+onAuthStateChanged(auth, (user)=>{ if (user) goNext(); });
 
 function humanAuthError(e){
   const code = e?.code || '';
