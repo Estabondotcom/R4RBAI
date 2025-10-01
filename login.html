@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>R4RB — Login</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .login-wrap{max-width:420px;margin:8vh auto;background:#14120e;border:1px solid #2b2923;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .login-wrap h1{color:#eadfcb;margin:0 0 10px;font-size:1.2rem}
+    .field{display:flex;flex-direction:column;margin:8px 0}
+    .field label{color:#cdbfa6;font-size:.85rem;margin-bottom:4px}
+    .field input{padding:10px;border-radius:10px;border:1px solid #2c2a25;background:#0f0e0b;color:#efeae0}
+    .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+    .btns button{border:1px solid #3b3428;background:linear-gradient(#2b261f,#201c16);color:#f0e7d8;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    .muted{color:#a59e91}
+    .err{color:#ffb4a4;margin-top:8px;font-size:.9rem}
+    .ok{color:#b7f7c2;margin-top:8px;font-size:.9rem}
+    .tiny{font-size:.78rem;color:#9a917f;margin-top:8px}
+  </style>
+</head>
+<body>
+  <main class="app" style="max-width:720px">
+    <section class="login-wrap">
+      <h1>Sign in to Roll for Rocket Boots</h1>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <div class="btns">
+        <button id="signinBtn">Sign In</button>
+        <button id="signupBtn">Create Account</button>
+        <button id="guestBtn">Continue as Guest</button>
+      </div>
+      <div id="status" class="tiny muted"></div>
+      <div id="err" class="err" style="display:none"></div>
+      <div id="ok" class="ok" style="display:none"></div>
+      <p class="tiny">After you sign in, we’ll redirect you to <code>play.html</code>. You can change that later to your campaign selection page.</p>
+    </section>
+  </main>
+  <script type="module" src="login.js"></script>
+</body>
+</html>
