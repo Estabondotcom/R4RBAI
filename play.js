@@ -7,7 +7,8 @@ const state = {
     {name:"Improvisation", tier:2}
   ]},
   inv: [{name:"Glider cloak",qty:1},{name:"Lockpicks",qty:1},{name:"Rations",qty:2}],
-  rollPending:null
+  rollPending:null,
+  testRolling:false // NEW: test mode flag
 };
 
 // ---------- DOM refs ----------
@@ -21,7 +22,7 @@ const tray = document.getElementById('tray');
 document.getElementById('trayToggle').onclick = ()=> tray.classList.toggle('open');
 
 document.getElementById('tabs').onclick = (e)=>{
-  if(e.target.tagName!=="BUTTON") return;
+  if(e.target.tagName!=='BUTTON') return;
   [...document.querySelectorAll('.tabs button')].forEach(b=>b.classList.remove('active'));
   e.target.classList.add('active');
   const map = {skills:'panel-skills',inv:'panel-inv',health:'panel-health'};
@@ -36,7 +37,7 @@ function renderSkills(){
     const row = document.createElement('div'); row.className='skill';
     row.innerHTML = `<span class="name">${s.name}</span>
       <span class="pill">${s.tier}d6</span>
-      <button data-skill="${s.name}">Roll</button>`;
+      <button data-skill='${s.name}'>Roll</button>`;
     row.querySelector('button').onclick = ()=> triggerRoll(s);
     wrap.appendChild(row);
   });
@@ -80,11 +81,68 @@ function typewriter(str, node, speed=12, done){
 // ---------- Chat Dock ----------
 function postDock(role, text){
   const div = document.createElement('div'); div.className='msg';
-  div.innerHTML = `<span class="tag">[${role}]</span>${escapeHtml(text)}`;
+  div.innerHTML = `<span class='tag'>[${role}]</span>${escapeHtml(text)}`;
   dockEl.appendChild(div);
   dockEl.scrollTop = dockEl.scrollHeight;
 }
 function escapeHtml(s){ return s.replace(/[&<>]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
+
+// ---------- COMMANDS ----------
+function handleCommand(raw){
+  // expects *command* exactly
+  const m = raw.match(/^\*(\w+)\*$/i);
+  if(!m) return false;
+  const cmd = m[1].toLowerCase();
+
+  const clamp = (v,min,max)=> Math.max(min, Math.min(max, v));
+
+  switch(cmd){
+    case 'addluck': {
+      const before = state.pc.luck;
+      state.pc.luck = clamp(state.pc.luck + 1, 0, 5);
+      renderHealth();
+      postDock('system', `Luck ${before!==state.pc.luck?'+1':'(max)'} — ${state.pc.luck}/5`);
+      return true;
+    }
+    case 'removeluck': {
+      const before = state.pc.luck;
+      state.pc.luck = clamp(state.pc.luck - 1, 0, 5);
+      renderHealth();
+      postDock('system', `Luck ${before!==state.pc.luck?'-1':'(min)'} — ${state.pc.luck}/5`);
+      return true;
+    }
+    case 'addwound': {
+      const before = state.pc.wounds;
+      state.pc.wounds = clamp(state.pc.wounds + 1, 0, 5);
+      renderHealth();
+      postDock('system', `Wounds ${before!==state.pc.wounds?'+1':'(max)'} — ${state.pc.wounds}/5`);
+      return true;
+    }
+    case 'removewound': {
+      const before = state.pc.wounds;
+      state.pc.wounds = clamp(state.pc.wounds - 1, 0, 5);
+      renderHealth();
+      postDock('system', `Wounds ${before!==state.pc.wounds?'-1':'(min)'} — ${state.pc.wounds}/5`);
+      return true;
+    }
+    case 'togglerolling': {
+      state.testRolling = !state.testRolling;
+      if(state.testRolling){
+        state.rollPending = { skill:'Test', difficulty:14 }; // generic DC
+        rollHint.style.display='inline-block';
+        postDock('system', 'Test rolling: ON — tap any Skill’s “Roll” to test vs DC 14. (No narration in test mode.)');
+      } else {
+        state.rollPending = null;
+        rollHint.style.display='none';
+        postDock('system', 'Test rolling: OFF');
+      }
+      return true;
+    }
+    default:
+      postDock('system', `Unknown command: ${cmd}`);
+      return true; // treat as handled to avoid sending to AI
+  }
+}
 
 // ---------- Roll flow (client-authoritative for demo) ----------
 function triggerRoll(s){
@@ -99,9 +157,19 @@ function triggerRoll(s){
   const dc = state.rollPending.difficulty;
   const tierResult = total >= dc+6 ? 'crit' : total >= dc ? 'success' : total >= dc-4 ? 'mixed' : 'fail';
   const rollObj = {skill:s.name,tier:s.tier,dc,raw,explosions,total,tierResult};
+
   rollHint.style.display='none';
   state.rollPending = null;
+
   postDock('roll', `Rolled ${s.name} ${s.tier}d6 → [${raw.join(',')}] total ${total} vs DC ${dc} → ${tierResult}`);
+
+  // In test mode we stop here (no AI narration).
+  if(state.testRolling){
+    postDock('system','(Test mode) Roll complete — no narration.');
+    return;
+  }
+
+  // Normal flow: send to AI (simulated here)
   fakeAiTurn({ player_input:'Resolve the action.', mechanics:{roll_result:rollObj} });
 }
 
@@ -163,6 +231,11 @@ async function fakeAiTurn(payload){
 const input = document.getElementById('userInput');
 document.getElementById('sendBtn').onclick = ()=>{
   const v = input.value.trim(); if(!v) return;
+
+  // Commands intercept
+  if(handleCommand(v)){ input.value=''; return; }
+
+  // Normal message
   postDock('you', v);
   input.value='';
   if(state.rollPending){
@@ -176,5 +249,6 @@ input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.p
 // ---------- Kickoff ----------
 window.addEventListener('load', ()=>{
   setTimeout(()=>{ document.getElementById('tray').classList.add('open'); setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200); }, 400);
-  fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:"Begin the adventure." });
+  fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:'Begin the adventure.' });
 });
+
