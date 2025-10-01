@@ -1,4 +1,4 @@
-// Firebase Login + Firestore bootstrap
+// Firebase Login + Firestore bootstrap + redirect handling
 const firebaseConfig = {
   apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
   authDomain: "r4rbai.firebaseapp.com",
@@ -21,6 +21,9 @@ const db = getFirestore(app);
 const $ = (id)=>document.getElementById(id);
 const statusEl = $('status'), errEl = $('err'), okEl = $('ok');
 
+const params = new URLSearchParams(location.search);
+const nextUrl = params.get('next');  // set by auth-guard if user tried to open a protected page
+
 function setStatus(msg){ statusEl.textContent = msg || ''; }
 function setErr(msg){ errEl.style.display = msg ? 'block' : 'none'; errEl.textContent = msg||''; }
 function setOk(msg){ okEl.style.display = msg ? 'block' : 'none'; okEl.textContent = msg||''; }
@@ -28,19 +31,15 @@ function setOk(msg){ okEl.style.display = msg ? 'block' : 'none'; okEl.textConte
 async function ensureUserDoc(user){
   const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
-  const base = {
-    email: user.email || null,
-    isAnonymous: !!user.isAnonymous,
-    updatedAt: serverTimestamp(),
-  };
-  if (!snap.exists()){
-    await setDoc(ref, { ...base, createdAt: serverTimestamp() });
-  } else {
-    await setDoc(ref, base, { merge: true });
-  }
+  const base = { email: user.email || null, isAnonymous: !!user.isAnonymous, updatedAt: serverTimestamp() };
+  if (!snap.exists()) await setDoc(ref, { ...base, createdAt: serverTimestamp() });
+  else await setDoc(ref, base, { merge: true });
 }
 
-async function goPlay(){ window.location.href = "play.html"; }
+function goNext(){
+  const defaultDest = 'play.html';
+  location.href = nextUrl ? decodeURIComponent(nextUrl) : defaultDest;
+}
 
 async function handleSignIn(){
   setErr(''); setOk(''); setStatus('Signing in…');
@@ -50,9 +49,10 @@ async function handleSignIn(){
     const password = $('password').value;
     const cred = await signInWithEmailAndPassword(auth, email, password);
     await ensureUserDoc(cred.user);
-    setOk('Signed in! Redirecting…'); goPlay();
+    setOk('Signed in! Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
+
 async function handleSignUp(){
   setErr(''); setOk(''); setStatus('Creating account…');
   try {
@@ -61,16 +61,17 @@ async function handleSignUp(){
     const password = $('password').value;
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await ensureUserDoc(cred.user);
-    setOk('Account created! Redirecting…'); goPlay();
+    setOk('Account created! Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
+
 async function handleGuest(){
   setErr(''); setOk(''); setStatus('Continuing as guest…');
   try {
     await setPersistence(auth, browserLocalPersistence);
     const cred = await signInAnonymously(auth);
     await ensureUserDoc(cred.user);
-    setOk('Guest session active. Redirecting…'); goPlay();
+    setOk('Guest session active. Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
 
@@ -78,7 +79,7 @@ $('signinBtn').onclick = handleSignIn;
 $('signupBtn').onclick = handleSignUp;
 $('guestBtn').onclick = handleGuest;
 
-onAuthStateChanged(auth, (user)=>{ if(user){ setStatus('Signed in — redirecting…'); goPlay(); } });
+onAuthStateChanged(auth, (user)=>{ if(user) goNext(); });
 
 function humanAuthError(e){
   const code = e?.code || '';

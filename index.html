@@ -3,64 +3,46 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>R4RB — Play</title>
+  <title>R4RB — Login</title>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    .login-wrap{max-width:420px;margin:8vh auto;background:#14120e;border:1px solid #2b2923;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .login-wrap h1{color:#eadfcb;margin:0 0 10px;font-size:1.2rem}
+    .field{display:flex;flex-direction:column;margin:8px 0}
+    .field label{color:#cdbfa6;font-size:.85rem;margin-bottom:4px}
+    .field input{padding:10px;border-radius:10px;border:1px solid #2c2a25;background:#0f0e0b;color:#efeae0}
+    .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+    .btns button{border:1px solid #3b3428;background:linear-gradient(#2b261f,#201c16);color:#f0e7d8;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    .muted{color:#a59e91}
+    .err{color:#ffb4a4;margin-top:8px;font-size:.9rem}
+    .ok{color:#b7f7c2;margin-top:8px;font-size:.9rem}
+    .tiny{font-size:.78rem;color:#9a917f;margin-top:8px}
+  </style>
 </head>
 <body>
-  <button class="tray-toggle" id="trayToggle" title="Character & Sheets">☰</button>
-
-  <aside class="tray" id="tray">
-    <div class="tabs" id="tabs">
-      <button data-tab="skills" class="active">Skills</button>
-      <button data-tab="inv">Inventory</button>
-      <button data-tab="health">Health</button>
-    </div>
-    <div class="panel" id="panel-skills"></div>
-    <div class="panel" id="panel-inv" style="display:none">
-      <div class="muted">Pack</div>
-      <div id="invList" class="tiny" style="margin-top:6px"></div>
-    </div>
-    <div class="panel" id="panel-health" style="display:none">
-      <div class="portrait tiny" id="portrait">Portrait</div>
-      <div class="row" style="margin-top:8px">
-        <span class="muted">Wounds</span>
-        <div class="health" id="wounds"></div>
+  <main class="app" style="max-width:720px">
+    <section class="login-wrap">
+      <h1>Sign in to Roll for Rocket Boots</h1>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
       </div>
-      <div class="row">
-        <span class="muted">Luck</span>
-        <div class="health" id="luck"></div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
       </div>
-      <div class="tiny muted" style="margin-top:8px">Statuses</div>
-      <div id="statuses" class="tiny"></div>
-    </div>
-  </aside>
-
-  <main class="app">
-    <section class="top" id="bookWrapper">
-      <div class="book-header">
-        <div class="row">
-          <div class="chapter">Chapter One • In medias res</div>
-          <label class="tiny scrolllock"><input type="checkbox" id="scrollLock" /> Scroll lock</label>
-        </div>
+      <div class="btns">
+        <button id="signinBtn">Sign In</button>
+        <button id="signupBtn">Create Account</button>
+        <button id="guestBtn">Continue as Guest</button>
       </div>
-      <div class="book" id="book"></div>
-    </section>
-
-    <section class="bottom">
-      <div class="messages" id="dockMessages" aria-live="polite"></div>
-      <div class="dock">
-        <div class="inputRow">
-          <textarea id="userInput" placeholder="Say what you do… (OOC questions welcome)"></textarea>
-          <button id="sendBtn">Send</button>
-        </div>
-      </div>
-      <div class="row">
-        <span class="tiny muted">Model: GPT-4o (simulated offline) • Max narrative ~250 words</span>
-        <span class="chip" id="rollHint" style="display:none">Roll required</span>
-      </div>
+      <div id="status" class="tiny muted"></div>
+      <div id="err" class="err" style="display:none"></div>
+      <div id="ok" class="ok" style="display:none"></div>
+      <p class="tiny">After you sign in, we’ll redirect you to <code>play.html</code>. You can change that later to your campaign selection page.</p>
     </section>
   </main>
 
-  <script src="play.js"></script>
+  <script type="module" src="login.js"></script>
 </body>
 </html>
