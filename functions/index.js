@@ -1,19 +1,20 @@
-const { onCall } = require("firebase-functions/v2/https");
-const { setGlobalOptions } = require("firebase-functions");
-const admin = require("firebase-admin");
+// functions/index.js  (Node 20+; firebase-functions v6)
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { setGlobalOptions } from "firebase-functions/v2/options";
+import admin from "firebase-admin";
 
 admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
-exports.deleteCampaign = onCall(async (request) => {
+export const deleteCampaign = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
-    throw new Error("UNAUTHENTICATED: Sign in required.");
+    throw new HttpsError("unauthenticated", "Sign in required.");
   }
 
   const campaignId = request.data?.campaignId;
   if (!campaignId || typeof campaignId !== "string") {
-    throw new Error("INVALID_ARGUMENT: campaignId is required.");
+    throw new HttpsError("invalid-argument", "campaignId is required.");
   }
 
   const ref = admin.firestore().collection("campaigns").doc(campaignId);
@@ -23,9 +24,9 @@ exports.deleteCampaign = onCall(async (request) => {
   }
 
   const data = snap.data();
+  // Adjust this field name if you store owner differently (ownerUid, etc.)
   if (data.uid !== uid) {
-    // you used `uid` on the doc; if you switch to ownerUid, update this check
-    throw new Error("PERMISSION_DENIED: Not your campaign.");
+    throw new HttpsError("permission-denied", "Not your campaign.");
   }
 
   await admin.firestore().recursiveDelete(ref);
