@@ -67,62 +67,65 @@ document.getElementById("tabs").onclick = (e) => {
 
 // ---------- Skills (name is the roll button; right side is Level Up / Specialize) ----------
 function renderSkills(){
-  const wrap = document.getElementById("panel-skills");
-  wrap.innerHTML = "";
+  const wrap = document.getElementById('panel-skills');
+  wrap.innerHTML = '';
 
   state.pc.skills.forEach(s=>{
     const level = s.tier;
     const diceN = diceForLevel(level);
-    const cost = xpCostToNext(level);
+    const cost  = xpCostToNext(level);
     const enoughXP = state.pc.xp >= cost;
 
-    const row = document.createElement("div");
-    row.className = "skill";
+    const row = document.createElement('div');
+    row.className = 'skill';
     row.innerHTML = `
-      <button class="skillRollBtn" data-skill="${s.name}">
+      <button type="button" class="skillRollBtn" data-skill="${s.name}">
         ${escapeHtml(s.name)}
       </button>
+
       <div class="skillMeta">
         <span class="pill">Level ${level}</span>
         <span class="pill">${diceN}d6</span>
       </div>
+
       <div class="skillActions">
         ${level < 4
-          ? `<button class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
+          ? `<button type="button" class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
                Level Up (${cost} XP)
              </button>`
-          : `<button class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
+          : `<button type="button" class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
                Specialize (5 XP)
              </button>`}
       </div>
     `;
 
-    // Skill name = roll
-    row.querySelector(".skillRollBtn").onclick = ()=> triggerRoll(s);
+    // Roll handler
+    row.querySelector('.skillRollBtn').addEventListener('click', ()=> triggerRoll(s));
 
+    // Level up / Specialize handlers
     if(level < 4){
-      const btn = row.querySelector("[data-levelup]");
-      btn.onclick = ()=>{
+      const btn = row.querySelector('[data-levelup]');
+      btn && btn.addEventListener('click', ()=>{
         const need = xpCostToNext(s.tier);
         if(state.pc.xp < need){
-          postDock("system", `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
+          postDock('system', `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
           return;
         }
         state.pc.xp -= need;
         levelUpSkill(s);
         renderHealth();
-      };
+      });
     } else {
-      const btn = row.querySelector("[data-special]");
-      btn.onclick = ()=>{
+      const btn = row.querySelector('[data-special]');
+      btn && btn.addEventListener('click', ()=>{
         if(state.pc.xp < 5){
-          postDock("system", `Need 5 XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
+          postDock('system', `Need 5 XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
           return;
         }
         state.pc.xp -= 5;
         levelUpSkill(s);   // at L4 this creates a specialization
         renderHealth();
-      };
+      });
     }
 
     wrap.appendChild(row);
