@@ -67,27 +67,25 @@ document.getElementById("tabs").onclick = (e) => {
 
 // ---------- Skills (name is the roll button; right side is Level Up / Specialize) ----------
 function renderSkills(){
-  const wrap = document.getElementById('panel-skills');
-  wrap.innerHTML = '';
+  const wrap = document.getElementById("panel-skills");
+  wrap.innerHTML = "";
 
   state.pc.skills.forEach(s=>{
     const level = s.tier;
     const diceN = diceForLevel(level);
-    const cost  = xpCostToNext(level);
+    const cost = xpCostToNext(level);
     const enoughXP = state.pc.xp >= cost;
 
-    const row = document.createElement('div');
-    row.className = 'skill';
+    const row = document.createElement("div");
+    row.className = "skill";
     row.innerHTML = `
       <button type="button" class="skillRollBtn" data-skill="${s.name}">
         ${escapeHtml(s.name)}
       </button>
-
       <div class="skillMeta">
         <span class="pill">Level ${level}</span>
         <span class="pill">${diceN}d6</span>
       </div>
-
       <div class="skillActions">
         ${level < 4
           ? `<button type="button" class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
@@ -99,32 +97,34 @@ function renderSkills(){
       </div>
     `;
 
-    // Roll handler
-    row.querySelector('.skillRollBtn').addEventListener('click', ()=> triggerRoll(s));
+    // Skill name = roll
+    row.querySelector(".skillRollBtn").addEventListener("click", ()=> triggerRoll(s));
 
     // Level up / Specialize handlers
     if(level < 4){
-      const btn = row.querySelector('[data-levelup]');
-      btn && btn.addEventListener('click', ()=>{
+      const btn = row.querySelector("[data-levelup]");
+      btn && btn.addEventListener("click", ()=>{
         const need = xpCostToNext(s.tier);
         if(state.pc.xp < need){
-          postDock('system', `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
+          postDock("system", `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
           return;
         }
         state.pc.xp -= need;
         levelUpSkill(s);
         renderHealth();
+        renderSkills(); // keep button states in sync
       });
     } else {
-      const btn = row.querySelector('[data-special]');
-      btn && btn.addEventListener('click', ()=>{
+      const btn = row.querySelector("[data-special]");
+      btn && btn.addEventListener("click", ()=>{
         if(state.pc.xp < 5){
-          postDock('system', `Need 5 XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
+          postDock("system", `Need 5 XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
           return;
         }
         state.pc.xp -= 5;
         levelUpSkill(s);   // at L4 this creates a specialization
         renderHealth();
+        renderSkills(); // keep button states in sync
       });
     }
 
@@ -152,7 +152,7 @@ function renderHealth(){
         <div class="row"><span class="label">Wounds</span><span id="woundsRow" class="icons"></span></div>
         <div class="row"><span class="label">XP</span><span class="value" id="xpVal">${state.pc.xp}</span></div>
         <div class="row"><span class="label">Luck</span><span class="value" id="luckVal">${state.pc.luck}</span></div>
-        <div class="row"><button id="buyLuckBtn" class="btn-soft tiny">Buy 1 Luck (2 XP)</button></div>
+        <div class="row"><button type="button" id="buyLuckBtn" class="btn-soft tiny">Buy 1 Luck (2 XP)</button></div>
         <div class="row"><span class="label">Statuses</span><span id="statuses" class="value">${state.pc.statuses.join(", ")||"—"}</span></div>
       </div>
     </div>
@@ -166,12 +166,21 @@ function renderHealth(){
     h.textContent = i<heartsFilled ? "♥" : "♡";
     W.appendChild(h);
   }
-  document.getElementById("buyLuckBtn").onclick = ()=>{
-    if(state.pc.xp<2){ postDock("system","Not enough XP to buy Luck (need 2 XP)."); return; }
-    state.pc.xp-=2; state.pc.luck+=1;
-    postDock("system","Spent 2 XP → +1 Luck.");
-    renderHealth();
-  };
+
+  const buyBtn = document.getElementById("buyLuckBtn");
+  if (buyBtn) {
+    buyBtn.addEventListener("click", ()=>{
+      if(state.pc.xp < 2){
+        postDock("system","Not enough XP to buy Luck (need 2 XP).");
+        return;
+      }
+      state.pc.xp -= 2;
+      state.pc.luck += 1;
+      postDock("system","Spent 2 XP → +1 Luck.");
+      renderHealth();
+      renderSkills();   // refresh buttons after XP changes
+    });
+  }
 }
 
 renderSkills(); renderInv(); renderHealth();
@@ -220,7 +229,11 @@ function handleCommand(raw){
       state.pc.wounds = clamp(state.pc.wounds - 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound -1 → ${state.pc.wounds}/${HEARTS_MAX}`); return true;
     case "addxp": {
       const n = Number.isFinite(argN) ? argN : 1;
-      state.pc.xp = Math.max(0, state.pc.xp + n); renderHealth(); postDock("system",`XP ${n>=0?"+":""}${n} → ${state.pc.xp}`); return true;
+      state.pc.xp = Math.max(0, state.pc.xp + n);
+      renderHealth();
+      renderSkills();   // refresh skills so Level Up buttons enable/disable properly
+      postDock("system",`XP ${n>=0?"+":""}${n} → ${state.pc.xp}`);
+      return true;
     }
     case "togglerolling":
       state.testRolling = !state.testRolling;
@@ -264,36 +277,50 @@ function triggerRoll(skill){
   // show the roll
   postDock("roll", `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${raw.join(",")}] total ${total} vs DC ${dc} → ${resultTier}`);
 
-  // Offer Luck reroll if possible (and only once)
-  state.pendingReroll = null;
-  if(state.pc.luck > 0){
-    // store context
-    state.pendingReroll = {
-      skillRef: skill,
-      rollObj,
-      diceCount,
-      used: false
-    };
-    const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
-    const controls = document.createElement("div");
-    controls.style.margin = "6px 0 0 28px";
-    controls.innerHTML = `
-      <button id="btnRerollLowest" class="btn-soft tiny">Reroll Lowest (1 Luck)</button>
-      <button id="btnResolve" class="btn-soft tiny">Resolve</button>
-    `;
-    msg.appendChild(controls);
-
-    document.getElementById("btnRerollLowest").onclick = ()=> doLuckReroll();
-    document.getElementById("btnResolve").onclick = ()=> finalizeRoll(false);
-  } else {
-    finalizeRoll(false); // no luck to spend, resolve immediately
+  // If no luck, resolve immediately and still award XP on fail
+  if(state.pc.luck <= 0){
+    if(resultTier === "fail"){
+      state.pc.xp += 1;
+      postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
+      renderHealth();
+      renderSkills(); // keep buttons in sync
+    }
+    // All-6s on initial pool → level up before narration
+    if(initialAllSixes){
+      postDock('system', `ALL 6s! ${skill.name} levels up!`);
+      levelUpSkill(skill);
+      renderHealth();
+      renderSkills();
+    }
+    finalizeRoll(false, rollObj);
+    return;
   }
 
-  // If they rolled all 6s on the *initial* pool, auto-level-up before narration
+  // Offer Luck reroll if possible (and only once)
+  state.pendingReroll = {
+    skillRef: skill,
+    rollObj,
+    diceCount,
+    used: false
+  };
+  const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
+  const controls = document.createElement("div");
+  controls.style.margin = "6px 0 0 28px";
+  controls.innerHTML = `
+    <button type="button" id="btnRerollLowest" class="btn-soft tiny">Reroll Lowest (1 Luck)</button>
+    <button type="button" id="btnResolve" class="btn-soft tiny">Resolve</button>
+  `;
+  msg.appendChild(controls);
+
+  document.getElementById("btnRerollLowest").addEventListener("click", ()=> doLuckReroll());
+  document.getElementById("btnResolve").addEventListener("click", ()=> finalizeRoll(false));
+
+  // All-6s on initial pool → level up before narration
   if(initialAllSixes){
     postDock('system', `ALL 6s! ${skill.name} levels up!`);
     levelUpSkill(skill);
     renderHealth();
+    renderSkills();
   }
 }
 
@@ -302,7 +329,7 @@ function doLuckReroll(){
   if(!ctx || ctx.used) return;
   if(state.pc.luck < 1){ postDock("system","No Luck available."); return; }
 
-  const { skillRef, rollObj, diceCount } = ctx;
+  const { rollObj, diceCount } = ctx;
 
   // find the index of the lowest among the initial dice (first diceCount entries)
   const initial = rollObj.raw.slice(0, diceCount);
@@ -326,28 +353,21 @@ function doLuckReroll(){
   finalizeRoll(true);
 }
 
-function finalizeRoll(wasReroll){
-  // Clear hint & pending first
+function finalizeRoll(wasReroll, providedRollObj){
+  // Clear hint & pending
   rollHint.style.display = 'none';
   state.rollPending = null;
 
   const ctx = state.pendingReroll;
-  if(!ctx){
-    // This path: no luck was offered; we already posted the roll.
-    // Apply XP and narration based on last roll posted.
-    // To keep it consistent, do nothing here; triggerRoll handled the all-6s check.
-  } else {
-    // Apply XP on fail with the possibly-updated result
-    if(ctx.rollObj.tierResult === "fail"){
-      state.pc.xp += 1;
-      postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
-      renderHealth();
-    }
-    // After an all-sixes reroll, we don't re-check the "all initial dice were 6" rule,
-    // as that rule applies to the initial roll only.
-  }
+  const payload = providedRollObj || (ctx ? ctx.rollObj : null);
 
-  const payload = ctx ? ctx.rollObj : null;
+  // Apply XP on fail here for the reroll case (non-reroll/no-luck already handled in triggerRoll)
+  if(ctx && ctx.rollObj && ctx.rollObj.tierResult === "fail"){
+    state.pc.xp += 1;
+    postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
+    renderHealth();
+    renderSkills();
+  }
 
   // If test mode, stop here (no narration)
   if(state.testRolling){
@@ -358,7 +378,10 @@ function finalizeRoll(wasReroll){
 
   // Send to "AI"
   if(payload){
-    fakeAiTurn({ player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.", mechanics:{ roll_result: payload } });
+    fakeAiTurn({
+      player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.",
+      mechanics: { roll_result: payload }
+    });
   }
   state.pendingReroll = null;
 }
