@@ -69,3 +69,31 @@ button:active{transform:translateY(1px)}
   .app{padding:6px}
   .top{padding:14px 12px 22px}
 }
+/* Modal */
+.modal.hidden { display:none; }
+.modal { position:fixed; inset:0; z-index:50; }
+.modal__backdrop { position:absolute; inset:0; background:rgba(0,0,0,.45); }
+.modal__dialog { position:relative; max-width:820px; margin:5vh auto; background:#111; border:1px solid #333; border-radius:12px; padding:16px; }
+.modal__header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.modal__body .field { display:block; margin:10px 0; }
+.field .label { display:block; font-size:.85rem; opacity:.8; margin-bottom:4px; }
+.portrait { width:180px; height:180px; object-fit:cover; border-radius:8px; border:1px solid #333; background:#0c0c0c; }
+.modal__footer { display:flex; justify-content:flex-end; gap:.5rem; margin-top:12px; }
+.icon-btn { background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer; }
+
+/* Grid helpers */
+.grid { display:grid; gap:12px; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+@media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* Traits */
+.traits { padding:8px; border:1px solid #2a2a2a; border-radius:8px; margin:8px 0; background:#0c0c0c; }
+.trait { display:flex; align-items:center; justify-content:space-between; padding:6px 0; }
+.trait__name { font-weight:600; }
+.pips { display:inline-flex; gap:6px; }
+.pip { width:16px; height:16px; border-radius:50%; border:1px solid #666; background:#141414; cursor:pointer; display:inline-block; }
+.pip.active { background:#e0e0e0; }
+.pip:disabled { opacity:.4; cursor:not-allowed; }
+
+/* Buttons */
+button.secondary { background:transparent; border:1px solid #444; color:#ddd; }
