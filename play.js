@@ -85,6 +85,10 @@ function renderHealth() {
       </div>
 
       <div class="rows">
+        <div class="nameRow">
+          <h3 class="pcName">${escapeHtml(state.pc.name || "—")}</h3>
+        </div>
+
         <div class="row">
           <span class="label">Wounds</span>
           <span id="woundsRow" class="icons"></span>
@@ -92,16 +96,16 @@ function renderHealth() {
 
         <div class="row">
           <span class="label">XP</span>
-          <span class="value"><span id="xpVal">${state.pc.xp}</span></span>
+          <span class="value" id="xpVal">${state.pc.xp}</span>
         </div>
 
         <div class="row">
           <span class="label">Luck</span>
-          <span class="value"><span id="luckVal">${state.pc.luck}</span></span>
+          <span class="value" id="luckVal">${state.pc.luck}</span>
         </div>
 
         <div class="row">
-          <button id="buyLuckBtn" class="tiny">Buy 1 Luck (2 XP)</button>
+          <button id="buyLuckBtn" class="btn-soft tiny">Buy 1 Luck (2 XP)</button>
         </div>
 
         <div class="row">
@@ -112,14 +116,13 @@ function renderHealth() {
     </div>
   `;
 
-  // Hearts render
+  // Hearts render (♥ full first, then empty ♡). Wounds = empty hearts.
   const W = document.getElementById("woundsRow");
   W.innerHTML = "";
   const heartsFilled = Math.max(0, HEARTS_MAX - state.pc.wounds);
   for (let i = 0; i < HEARTS_MAX; i++) {
     const h = document.createElement("span");
-    h.className = "pill";
-    // filled hearts first, then empties
+    h.className = "pill heart";
     h.textContent = i < heartsFilled ? "♥" : "♡";
     W.appendChild(h);
   }
