@@ -38,16 +38,17 @@
         <div><label class="muted tiny">Campaign name</label><input id="c_name" placeholder="Emberquay Heist"/></div>
         <div><label class="muted tiny">Theme</label><input id="c_theme" placeholder="Gaslamp caper"/></div>
         <div><label class="muted tiny">Setting</label><input id="c_setting" placeholder="Floating canal city"/></div>
-        <div><label class="muted tiny">Character name</label><input id="c_charname" placeholder="Rin Kestrel"/></div>
       </div>
       <div style="margin-top:8px">
         <label class="muted tiny">Story premise</label>
         <textarea id="c_premise" placeholder="A courier flees with a prototype; rival crews and sky-patrol close in..."></textarea>
       </div>
-      <div style="margin-top:8px">
-        <label class="muted tiny">Character description</label>
-        <textarea id="c_chardesc" placeholder="Nervy rooftop runner; hates deep water; a knack for improvisation."></textarea>
-      </div>
+      <!-- Inline Create Character (replaces the old Character fields) -->
+<label class="field">
+  <span class="label">Character</span>
+  <button type="button" id="createCharacterInline" class="secondary">+ Create Character</button>
+  <div class="tiny muted" id="charSummary">No character yet. Click to create.</div>
+</label>
       <div class="row" style="margin-top:10px">
         <span class="muted tiny">We’ll save this under your account.</span>
         <button id="createBtn">Create campaign</button>
@@ -60,8 +61,7 @@
   <!-- Campaign logic -->
   <script type="module" src="campaigns.js"></script>
 <!-- Toolbar -->
-<div class="toolbar">
-  <button id="createCharacterBtn">+ Create Character</button>
+<div class="toolbar"
   <button id="signOutBtn">Sign out</button>
 </div>
 
