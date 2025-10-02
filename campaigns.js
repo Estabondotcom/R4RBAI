@@ -76,16 +76,27 @@ function openModal() {
   } else {
     resetCharForm();
   }
+
+  // NEW: lock background scroll
+  document.body.classList.add("modal-open");
+
   charModal.classList.remove("hidden");
   charModal.setAttribute("aria-hidden", "false");
-  pcName.focus();
+  pcName?.focus();
 }
+
 function closeModal() {
   charModal.classList.add("hidden");
   charModal.setAttribute("aria-hidden", "true");
+
+  // NEW: restore background scroll
+  document.body.classList.remove("modal-open");
 }
+
 // backdrop + [data-close]
-charModal?.addEventListener("click", (e) => { if (e.target.matches("[data-close]")) closeModal(); });
+charModal?.addEventListener("click", (e) => {
+  if (e.target.matches("[data-close]")) closeModal();
+});
 
 // ----- Image handling -----
 const DEFAULT_IMG = "data:image/svg+xml;utf8," + encodeURIComponent(`
