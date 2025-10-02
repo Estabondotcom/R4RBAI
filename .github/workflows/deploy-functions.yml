@@ -1,0 +1,44 @@
+name: Deploy Firebase Functions
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'functions/**'
+      - 'firebase.json'
+      - 'firestore.rules'
+      - '.firebaserc'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Auth to Google Cloud using your service account JSON
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      # (Optional) Install dependencies for functions locally (not strictly required for deploy)
+      - name: Install functions deps
+        run: npm ci --prefix functions
+
+      # Deploy just the specific function(s); add firestore:rules if you want
+      - name: Deploy Functions
+        run: |
+          firebase deploy \
+            --project r4rbai \
+            --only functions:deleteCampaign
