@@ -59,5 +59,94 @@
   <script type="module" src="auth-guard.js"></script>
   <!-- Campaign logic -->
   <script type="module" src="campaigns.js"></script>
+<!-- Toolbar -->
+<div class="toolbar">
+  <button id="createCharacterBtn">+ Create Character</button>
+  <button id="signOutBtn">Sign out</button>
+</div>
+
+<!-- Where the list renders -->
+<div id="campaignList" class="list"></div>
+
+<!-- Character Creation Modal -->
+<div id="charModal" class="modal hidden" aria-hidden="true">
+  <div class="modal__backdrop" data-close></div>
+  <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="charTitle">
+    <div class="modal__header">
+      <h2 id="charTitle">Create Character</h2>
+      <button class="icon-btn" data-close aria-label="Close">✕</button>
+    </div>
+
+    <form id="charForm" class="modal__body">
+      <!-- Top: Name -->
+      <label class="field">
+        <span class="label">Name</span>
+        <input id="pcName" type="text" maxlength="64" required placeholder="Rin Kestrel"/>
+      </label>
+
+      <!-- Image + upload -->
+      <div class="grid grid-2">
+        <div>
+          <div class="label">Portrait</div>
+          <img id="pcImagePreview" class="portrait" alt="Character portrait" />
+          <div class="row" style="margin-top:.5rem; gap:.5rem">
+            <label class="button">
+              <input id="pcImageFile" type="file" accept="image/*" hidden />
+              Upload Image
+            </label>
+            <button type="button" id="pcImageClear" class="secondary">Remove</button>
+          </div>
+        </div>
+
+        <div>
+          <label class="field">
+            <span class="label">Description</span>
+            <textarea id="pcDescription" rows="5" placeholder="Look, vibe, goals..."></textarea>
+          </label>
+        </div>
+      </div>
+
+      <!-- Traits block -->
+      <div class="traits">
+        <div class="row space-between">
+          <div class="label">Traits</div>
+          <div class="tiny">Points remaining: <span id="pointsRemaining">8</span></div>
+        </div>
+
+        <div class="trait" data-trait="Constitution">
+          <span class="trait__name">Constitution</span>
+          <span class="pips" data-pips="Constitution"></span>
+        </div>
+        <div class="trait" data-trait="Strength">
+          <span class="trait__name">Strength</span>
+          <span class="pips" data-pips="Strength"></span>
+        </div>
+        <div class="trait" data-trait="Dexterity">
+          <span class="trait__name">Dexterity</span>
+          <span class="pips" data-pips="Dexterity"></span>
+        </div>
+        <div class="trait" data-trait="Intelligence">
+          <span class="trait__name">Intelligence</span>
+          <span class="pips" data-pips="Intelligence"></span>
+        </div>
+        <div class="trait" data-trait="Magic">
+          <span class="trait__name">Magic</span>
+          <span class="pips" data-pips="Magic"></span>
+        </div>
+      </div>
+
+      <!-- Background (larger at bottom) -->
+      <label class="field">
+        <span class="label">Background</span>
+        <textarea id="pcBackground" rows="6" placeholder="Origin, crew, debts, secrets…"></textarea>
+      </label>
+
+      <div class="modal__footer">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button id="saveCharacterBtn" type="submit">Create Character</button>
+      </div>
+    </form>
+  </div>
+</div>
 </body>
 </html>
