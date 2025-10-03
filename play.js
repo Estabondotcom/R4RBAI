@@ -760,19 +760,19 @@ document.getElementById("sendBtn").onclick = ()=>{
     return;
   }
 
-  aiTurnHandler({
-    state_summary: buildStateSummary(),
-    recent_turns: [],
-    // pass tiny rules cheat-sheet so the AI picks sane DCs
-    mechanics: {
-      rules: {
-        dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
-        crit_margin: RULES?.crit_margin ?? 10,
-        difficulty_scale: RULES?.difficulty_scale || []
-      }
-    },
-    player_input: v
-  });
+aiTurnHandler({
+  state_summary: buildStateSummary(),
+  campaign_card: buildCampaignCard(),
+  recent_turns: [],
+  mechanics: {
+    rules: {
+      dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
+      crit_margin: RULES?.crit_margin ?? 10,
+      difficulty_scale: RULES?.difficulty_scale || []
+    }
+  },
+  player_input: v + "\n\n(Use only the provided campaign_card and state_summary.)"
+});
 };
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
@@ -877,38 +877,38 @@ window.addEventListener('load', async ()=>{
   // 0) Load rules FIRST so UI labels & AI cheat-sheet are correct
   await loadRules();
 
-  // 1) Load campaign by ?cid=...
   // 1) Ensure we are signed in before touching Firestore
-try {
-  await ensureSignedIn();
-} catch (e) {
-  postDock("system","Login failed or cancelled.");
-  return;
-}
+  try {
+    await ensureSignedIn();
+  } catch (e) {
+    postDock("system","Login failed or cancelled.");
+    return;
+  }
 
-// 2) Load campaign by ?cid=...
-const ok = await hydrateFromFirestoreByCid();
-  // 2) Session start: ensure Luck = start value if not set/persisted higher
+  // 2) Load campaign by ?cid=...
+  const ok = await hydrateFromFirestoreByCid();
+
+  // 2.5) Create starter kit if missing (3 L1 skills + 3 items, once)
+  await maybeGenerateStarterKit();
+
+  // 3) Session start: ensure Luck = start value if not set/persisted higher
   const startLuck = RULES?.luck?.start ?? 1;
   if (typeof state.pc.luck !== 'number' || state.pc.luck < startLuck) {
     state.pc.luck = startLuck;
     renderHealth();
   }
-const ok = await hydrateFromFirestoreByCid();
 
-// Create starter kit if missing
-await maybeGenerateStarterKit();
-
-  // 3) If test mode, don't call AI
+  // 4) If test mode, don't call AI
   if(state.testRolling){
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
 
-  // 4) Start AI with hydrated data (or quick start if none), include tiny rules card
+  // 5) Start AI with hydrated data, pass a compact campaign card so the AI sticks to your world
   aiTurnHandler({
     kickoff: true,
     state_summary: buildStateSummary(),
+    campaign_card: buildCampaignCard(),
     recent_turns: [],
     mechanics: {
       rules: {
@@ -917,6 +917,7 @@ await maybeGenerateStarterKit();
         difficulty_scale: RULES?.difficulty_scale || []
       }
     },
-    player_input: ok ? 'Begin the adventure.' : 'Begin a quick start one-shot.'
+    player_input: ok ? 'Use the campaign_card below and begin the adventure in THIS setting.' 
+                     : 'Begin a quick start one-shot using the campaign_card below.',
   });
 });
