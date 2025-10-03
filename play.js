@@ -1,14 +1,18 @@
 // ---------- Minimal client state ----------
 const state = {
+  campaign: { id:"", title:"", theme:"", setting:"", premise:"" },
   campaignId: crypto.randomUUID(),
   pc: {
     name: "Rin Kestrel",
+    description: "",
+    background: "",
     wounds: 0,              // 0..4 (0 = all hearts full, 4 = all empty)
     luck: 0,                // numeric
     xp: 0,                  // numeric
     statuses: [],
+    traits: null,
     portraitDataUrl: "",
-    // NOTE: 'tier' == Level (1..4). Dice = level + 1 (L1=2d6 ... L4=5d6)
+    // 'tier' == Level (1..4). Dice = level + 1 (L1=2d6 ... L4=5d6)
     skills: [
       { name: "Athletics", tier: 2 },
       { name: "Streetwise", tier: 3 },
@@ -33,7 +37,7 @@ const scrollLock = document.getElementById("scrollLock");
 
 // ---------- AI Config ----------
 const USE_AI = true;
-// TODO: replace <YOUR_PROJECT_ID> after deploying functions
+// Use your deployed v2 Cloud Run URL here:
 const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app";
 
 async function callAiTurn(payload){
@@ -52,14 +56,26 @@ async function callAiTurn(payload){
 
 function buildStateSummary(){
   return {
+    campaign: {
+      id: state.campaign?.id || "",
+      title: state.campaign?.title || "",
+      theme: state.campaign?.theme || "",
+      setting: state.campaign?.setting || "",
+      premise: state.campaign?.premise || ""
+    },
     pc: {
       name: state.pc.name,
+      description: state.pc.description || "",
+      background: state.pc.background || "",
       xp: state.pc.xp,
       luck: state.pc.luck,
       wounds: state.pc.wounds,
       statuses: state.pc.statuses,
+      portrait: !!state.pc.portraitDataUrl,
+      traits: state.pc.traits || null,
       skills: state.pc.skills.map(s=>({ name: s.name, level: s.tier }))
-    }
+    },
+    inventory: state.inv
   };
 }
 
@@ -215,8 +231,6 @@ function renderHealth(){
   }
 }
 
-renderSkills(); renderInv(); renderHealth();
-
 // ---------- Book typing effect ----------
 function appendToBook(text){
   const paragraphs=text.trim().split(/\n{2,}/); let idx=0;
@@ -243,7 +257,7 @@ function postDock(role,text){
 }
 function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
 
-// ---------- Commands (keep your *function* format) ----------
+// ---------- Commands ----------
 function handleCommand(raw){
   // Supports "*command*" or "*command N*"
   const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
@@ -418,7 +432,7 @@ function finalizeRoll(wasReroll, providedRollObj){
   state.pendingReroll = null;
 }
 
-// ---------- AI turn handler (no fake text) ----------
+// ---------- AI turn handler ----------
 async function aiTurnHandler(payload){
   try{
     const text = USE_AI ? await callAiTurn({
@@ -449,6 +463,73 @@ async function aiTurnHandler(payload){
   }catch(err){
     console.error(err);
     postDock('system', 'AI request failed.');
+  }
+}
+
+// ---------- URL + Firebase: hydrate campaign/pc by ?cid= ----------
+function getQueryParam(name){
+  const v = new URLSearchParams(location.search).get(name);
+  return v ? decodeURIComponent(v) : null;
+}
+
+// Firebase (read-only on this page)
+import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+// If your app is already initialized elsewhere on this page, this will be a no-op
+const fbApp = getApps().length ? getApps()[0] : initializeApp({
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID"
+});
+const db = getFirestore(fbApp);
+
+async function hydrateFromFirestoreByCid(){
+  const cid = getQueryParam("cid");
+  if(!cid){ postDock("system","No campaign id in URL."); return false; }
+
+  try{
+    const snap = await getDoc(doc(db, "campaigns", cid));
+    if(!snap.exists()){ postDock("system","Campaign not found."); return false; }
+    const data = snap.data();
+
+    // Campaign meta
+    state.campaign = {
+      id: cid,
+      title: data.title || data.name || "",
+      theme: data.theme || "",
+      setting: data.setting || "",
+      premise: data.premise || data.storyPremise || ""
+    };
+
+    // Inventory (optional)
+    if(Array.isArray(data.inv)) state.inv = data.inv;
+
+    // PC
+    const pc = data.pc || {};
+    state.pc = {
+      ...state.pc,
+      name: pc.name || "",
+      description: pc.description || "",
+      background: pc.background || "",
+      portraitDataUrl: pc.portraitDataUrl || "",
+      xp: Number(pc.xp || 0),
+      luck: Number(pc.luck || 0),
+      wounds: Number(pc.wounds || 0),
+      statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
+      traits: pc.traits || null,
+      skills: Array.isArray(pc.skills) && pc.skills.length
+        ? pc.skills.map(s=>({ name:String(s.name||""), tier:Number(s.tier||1) }))
+        : state.pc.skills
+    };
+
+    // Re-render UI with real data
+    renderSkills(); renderInv(); renderHealth();
+    return true;
+  }catch(e){
+    console.error(e);
+    postDock("system","Error loading campaign.");
+    return false;
   }
 }
 
@@ -484,19 +565,27 @@ document.getElementById("sendBtn").onclick = ()=>{
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
 // ---------- Kickoff ----------
-window.addEventListener('load', ()=>{
-  setTimeout(()=>{ document.getElementById('tray').classList.add('open'); setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200); }, 400);
+window.addEventListener('load', async ()=>{
+  // cute tray peek
+  setTimeout(()=>{ document.getElementById('tray').classList.add('open');
+    setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200);
+  }, 400);
 
+  // 1) Load campaign by ?cid=...
+  const ok = await hydrateFromFirestoreByCid();
+
+  // 2) If test mode, don't call AI
   if(state.testRolling){
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
 
+  // 3) Start AI with hydrated data (or quick start if none)
   aiTurnHandler({
     kickoff: true,
     state_summary: buildStateSummary(),
     recent_turns: [],
     mechanics: {},
-    player_input:'Begin the adventure.'
+    player_input: ok ? 'Begin the adventure.' : 'Begin a quick start one-shot.'
   });
 });
