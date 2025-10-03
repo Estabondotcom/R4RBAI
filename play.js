@@ -668,14 +668,13 @@ function getQueryParam(name){
 }
 
 // Firebase (read-only on this page)
+import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import {
   getAuth,
   onAuthStateChanged,
   signInAnonymously   // quick dev login (swap for Google/email later)
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-const auth = getAuth();
-import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 // If your app is already initialized elsewhere on this page, this will be a no-op
 const fbApp = getApps().length ? getApps()[0] : initializeApp({
@@ -684,6 +683,8 @@ const fbApp = getApps().length ? getApps()[0] : initializeApp({
   projectId: "r4rbai"
 });
 const db = getFirestore(fbApp);
+const auth = getAuth(fbApp); // <-- IMPORTANT: bind Auth to the same app
+
 
 async function hydrateFromFirestoreByCid(){
   const cid = getQueryParam("cid");
