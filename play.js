@@ -668,6 +668,12 @@ function getQueryParam(name){
 }
 
 // Firebase (read-only on this page)
+import {
+  getAuth,
+  onAuthStateChanged,
+  signInAnonymously   // quick dev login (swap for Google/email later)
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+const auth = getAuth();
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
@@ -770,6 +776,24 @@ document.getElementById("sendBtn").onclick = ()=>{
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
 // ---------- Kickoff ----------
+async function ensureSignedIn() {
+  return new Promise((resolve, reject) => {
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        resolve(user); // ✅ already logged in
+      } else {
+        try {
+          // Quick fix: anonymous login
+          const cred = await signInAnonymously(auth);
+          resolve(cred.user);
+        } catch (e) {
+          reject(e);
+        }
+      }
+    });
+  });
+}
+
 window.addEventListener('load', async ()=>{
   // cute tray peek
   setTimeout(()=>{ document.getElementById('tray').classList.add('open');
@@ -780,8 +804,16 @@ window.addEventListener('load', async ()=>{
   await loadRules();
 
   // 1) Load campaign by ?cid=...
-  const ok = await hydrateFromFirestoreByCid();
+  // 1) Ensure we are signed in before touching Firestore
+try {
+  await ensureSignedIn();
+} catch (e) {
+  postDock("system","Login failed or cancelled.");
+  return;
+}
 
+// 2) Load campaign by ?cid=...
+const ok = await hydrateFromFirestoreByCid();
   // 2) Session start: ensure Luck = start value if not set/persisted higher
   const startLuck = RULES?.luck?.start ?? 1;
   if (typeof state.pc.luck !== 'number' || state.pc.luck < startLuck) {
