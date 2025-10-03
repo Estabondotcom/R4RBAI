@@ -14,9 +14,9 @@ const state = {
     portraitDataUrl: "",
     // 'tier' == Level (1..4). Dice = level + 1 (L1=2d6 ... L4=5d6)
     skills: [
-      { name: "Athletics", tier: 2 },
-      { name: "Streetwise", tier: 3 },
-      { name: "Improvisation", tier: 1 }
+      { name: "Athletics", tier: 2, traits: ["athletics"] },
+      { name: "Streetwise", tier: 3, traits: ["social","cunning"] },
+      { name: "Improvisation", tier: 1, traits: ["improv"] }
     ]
   },
   inv: [
@@ -73,19 +73,101 @@ function buildStateSummary(){
       statuses: state.pc.statuses,
       portrait: !!state.pc.portraitDataUrl,
       traits: state.pc.traits || null,
-      skills: state.pc.skills.map(s=>({ name: s.name, level: s.tier }))
+      skills: state.pc.skills.map(s=>({ name: s.name, level: s.tier, traits: s.traits||[] }))
     },
     inventory: state.inv
   };
 }
 
 // ---------- Helpers ----------
-function diceForLevel(level){ return Math.max(1, Math.min(5, level + 1)); } // L1=2d6 .. L4=5d6
-function xpCostToNext(level){ return level >= 4 ? 5 : (level + 1); }       // L4 uses specialization cost 5 XP
+// ---------- Rules loading/compilation ----------
+let RULES = null;
+
+function defaultRules(){
+  return {
+    crit_margin: 10,
+    dice_by_level: {1:2,2:3,3:4,4:5},
+    xp_on_fail: 1,
+    xp_cost_next: {1:2,2:3,3:4,4:5},
+    all_sixes_explodes: true,
+    difficulty_scale: [],
+    luck: { start:1, reroll:"lowest_d6", xp_cost:2 },
+    wounds: { levels:4, penalty_at_or_above:2, penalty_value:-3 },
+    statuses: {},
+    items: {}
+  };
+}
+
+async function loadRules(){
+  try{
+    const res = await fetch("modrules.json");
+    if(!res.ok) throw new Error(res.statusText);
+    const raw = await res.json();
+    // tiny normalization
+    RULES = {
+      ...defaultRules(),
+      ...raw,
+      dice_by_level: Object.fromEntries(
+        Object.entries(raw.dice_by_level||raw["dice_by_level"]||{}).map(([k,v])=>[+k, +v])
+      )
+    };
+  }catch(e){
+    console.warn("Failed to load modrules.json; using defaults.", e);
+    RULES = defaultRules();
+  }
+}
+
+function diceForLevel(level){
+  // Prefer RULES if loaded; fall back to simple +1 rule (L1=2d6 .. L4=5d6)
+  const map = (RULES && RULES.dice_by_level) || {1:2,2:3,3:4,4:5};
+  const n = map[level] ?? (level+1);
+  return Math.max(1, Math.min(6, n));
+}
+function xpCostToNext(level){ return RULES?.xp_cost_next?.[level] ?? (level >= 4 ? 5 : (level + 1)); }
+
+// Traits helpers
+function skillTraits(skill){
+  return Array.isArray(skill.traits) ? skill.traits.map(t=>String(t).toLowerCase()) : [];
+}
+
+function computeModsForSkill(skill){
+  let mod = 0;
+  const details = [];
+  const traits = skillTraits(skill);
+
+  // Wounds global penalty (PDF: wounds level 2 = -3 to all checks)
+  if (RULES?.wounds && state.pc.wounds >= (RULES.wounds.penalty_at_or_above ?? 2)) {
+    const v = RULES.wounds.penalty_value ?? -3;
+    mod += v; details.push(`wounds ${v}`);
+  }
+
+  // Status effects from state.pc.statuses (strings), mapped via RULES.statuses
+  for (const s of (state.pc.statuses || [])) {
+    const defs = RULES.statuses?.[String(s).toLowerCase()];
+    if (!defs) continue;
+    for (const [tag,val] of Object.entries(defs)) {
+      if (traits.includes(tag.toLowerCase())) { mod += val; details.push(`${s} ${val}`); }
+    }
+  }
+
+  // Item bonuses from state.inv, mapped via RULES.items
+  for (const it of (state.inv || [])) {
+    const defs = RULES.items?.[String(it.name||"").toLowerCase()];
+    if (!defs) continue;
+    const qty = it.qty || 1;
+    for (const [tag,val] of Object.entries(defs)) {
+      if (traits.includes(tag.toLowerCase())) { mod += (val * qty); details.push(`${it.name} ${val*qty}`); }
+    }
+  }
+
+  return { mod, details };
+}
+
+function d6(){ return Math.floor(Math.random()*6)+1; }
 
 function ensureDoAnything(){
   if (!state.pc.skills.some(s => s.name === "Do Anything")) {
-    state.pc.skills.unshift({ name: "Do Anything", tier: 1 });
+    state.pc.skills.unshift({ name: "Do Anything", tier: 1, traits: ["improv"] });
   }
 }
 
@@ -104,24 +186,24 @@ function levelUpSkill(skill){
       `Create a specialization for "${base}" (e.g., "${base}: Rooftop Parkour")`,
       `${base}: Specialization`
     ) || `${base}: Specialization`;
-    state.pc.skills.push({ name: specName, tier: 1 });
+    state.pc.skills.push({ name: specName, tier: 1, traits: skillTraits(skill) });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
   }
   renderSkills();
 }
 
 function maybeCreateNewSkillFromDoAnything(){
-  const name = prompt(
-    "Success with Do Anything! Name the new related skill (Level 1):",
-    ""
-  );
+  const name = prompt("Success with Do Anything! Name the new related skill (Level 1):", "");
   if (!name) return;
   if (state.pc.skills.some(s => s.name.toLowerCase() === name.toLowerCase())) {
     postDock("system", `Skill "${name}" already exists.`);
     return;
   }
-  state.pc.skills.push({ name, tier: 1 });
-  postDock("system", `New skill created: ${name} (Level 1).`);
+  const traitStr = prompt("Add 1–2 traits for this skill (comma-separated, e.g., social,cunning):", "");
+  const traits = (traitStr||"")
+    .split(",").map(s=>s.trim()).filter(Boolean).slice(0,2);
+  state.pc.skills.push({ name, tier: 1, traits });
+  postDock("system", `New skill created: ${name} (Level 1) — traits: ${traits.join(", ")||"—"}.`);
   renderSkills();
 }
 
@@ -161,6 +243,11 @@ function renderSkills(){
       <div class="skillMeta">
         <span class="pill">Level ${level}</span>
         <span class="pill">${diceN}d6</span>
+        ${
+          (Array.isArray(s.traits) && s.traits.length)
+            ? s.traits.map(t=>`<span class="pill soft">${escapeHtml(t)}</span>`).join("")
+            : ""
+        }
       </div>
       <div class="skillActions"></div>
     `;
@@ -175,7 +262,7 @@ function renderSkills(){
       </button>`;
     } else {
       actions.innerHTML = `<button type="button" class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
-        Specialize (5 XP)
+        Specialize (${xpCostToNext(level)} XP)
       </button>`;
     }
 
@@ -199,11 +286,12 @@ function renderSkills(){
     } else if (!isDoAnything && level >= 4) {
       const btn = row.querySelector("[data-special]");
       btn && btn.addEventListener("click", ()=>{
-        if(state.pc.xp < 5){
-          postDock("system", `Need 5 XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
+        const need = xpCostToNext(s.tier);
+        if(state.pc.xp < need){
+          postDock("system", `Need ${need} XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
           return;
         }
-        state.pc.xp -= 5;
+        state.pc.xp -= need;
         levelUpSkill(s);   // at L4 this creates a specialization
         renderHealth();
         renderSkills(); // keep button states in sync
@@ -215,7 +303,7 @@ function renderSkills(){
 }
 
 function renderInv(){
-  document.getElementById("invList").innerHTML = state.inv.map(i=>`• ${i.name} ×${i.qty}`).join("<br/>");
+  document.getElementById("invList").innerHTML = state.inv.map(i=>`• ${escapeHtml(i.name)} ×${i.qty}`).join("<br/>");
 }
 
 // ---------- Health panel ----------
@@ -234,7 +322,7 @@ function renderHealth(){
         <div class="row"><span class="label">Wounds</span><span id="woundsRow" class="icons"></span></div>
         <div class="row"><span class="label">XP</span><span class="value" id="xpVal">${state.pc.xp}</span></div>
         <div class="row"><span class="label">Luck</span><span class="value" id="luckVal">${state.pc.luck}</span></div>
-        <div class="row"><button type="button" id="buyLuckBtn" class="btn-soft tiny">Buy 1 Luck (2 XP)</button></div>
+        <div class="row"><button type="button" id="buyLuckBtn" class="btn-soft tiny">Buy 1 Luck (${RULES?.luck?.xp_cost ?? 2} XP)</button></div>
         <div class="row"><span class="label">Statuses</span><span id="statuses" class="value">${state.pc.statuses.join(", ")||"—"}</span></div>
       </div>
     </div>
@@ -252,13 +340,14 @@ function renderHealth(){
   const buyBtn = document.getElementById("buyLuckBtn");
   if (buyBtn) {
     buyBtn.addEventListener("click", ()=>{
-      if(state.pc.xp < 2){
-        postDock("system","Not enough XP to buy Luck (need 2 XP).");
+      const cost = RULES?.luck?.xp_cost ?? 2;
+      if(state.pc.xp < cost){
+        postDock("system",`Not enough XP to buy Luck (need ${cost} XP).`);
         return;
       }
-      state.pc.xp -= 2;
+      state.pc.xp -= cost;
       state.pc.luck += 1;
-      postDock("system","Spent 2 XP → +1 Luck.");
+      postDock("system",`Spent ${cost} XP → +1 Luck.`);
       renderHealth();
       renderSkills();   // refresh buttons after XP changes
     });
@@ -284,12 +373,12 @@ function typewriter(str,node,speed=12,done){
 function postDock(role,text){
   const div=document.createElement("div");
   div.className="msg";
-  div.innerHTML=`<span class='tag'>[${role}]</span>${escapeHtml(text)}`;
+  div.innerHTML=`<span class='tag'>[${escapeHtml(role)}]</span>${escapeHtml(text)}`;
   dockEl.appendChild(div);
   dockEl.scrollTop=dockEl.scrollHeight;
   return div; // return element so we can attach buttons when needed
 }
-function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
+function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
 
 // ---------- Commands ----------
 function handleCommand(raw){
@@ -297,6 +386,24 @@ function handleCommand(raw){
   const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
   const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
   const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+  // quick status add/remove: *addstatus drunk* / *removestatus drunk*
+  const mStatus = raw.match(/^\*(addstatus|removestatus)\s+(.+)\*$/i);
+  if (mStatus) {
+    const action = mStatus[1].toLowerCase();
+    const name = mStatus[2].trim();
+    if (name) {
+      if (action === "addstatus") {
+        if (!state.pc.statuses.includes(name)) state.pc.statuses.push(name);
+        postDock("system", `Status added: ${name}`);
+      } else {
+        state.pc.statuses = state.pc.statuses.filter(s=>s.toLowerCase()!==name.toLowerCase());
+        postDock("system", `Status removed: ${name}`);
+      }
+      renderHealth();
+    }
+    return true;
+  }
 
   switch(cmd){
     case "addluck":
@@ -316,8 +423,8 @@ function handleCommand(raw){
       return true;
     }
     case "newsession":
-      state.pc.luck = 1;
-      postDock("system","New session: Luck reset to 1.");
+      state.pc.luck = RULES?.luck?.start ?? 1;
+      postDock("system",`New session: Luck reset to ${state.pc.luck}.`);
       renderHealth();
       return true;
     case "togglerolling":
@@ -345,34 +452,58 @@ function triggerRoll(skill){
     return;
   }
 
+  // how many dice?
   const baseDice = diceForLevel(skill.tier);
   const diceCount = baseDice + (state.rollPending.aid || 0);
 
-  let raw = [], explosions = 0, total = 0;
-  function rollD6(){ const r=Math.floor(Math.random()*6)+1; raw.push(r); total+=r; if(r===6){ explosions++; rollD6(); } }
-  for(let i=0;i<diceCount;i++) rollD6();
+  // roll the initial pool (no explosions yet)
+  const initial = [];
+  for (let i=0;i<diceCount;i++) initial.push(d6());
+
+  // all-6s explosion chain (PDF): only if initial pool is all 6s
+  const initialAllSixes = initial.every(v => v === 6);
+  const explosion = [];
+  if (initialAllSixes && RULES?.all_sixes_explodes !== false) {
+    let r = d6();
+    while (r === 6) { explosion.push(r); r = d6(); }
+    explosion.push(r);
+  }
 
   const dc = state.rollPending.difficulty;
-  // Rules: no mixed; crit if beat DC by 10+
-  const resultTier = total >= dc + 10 ? "crit"
-                   : total >= dc       ? "success"
-                   :                     "fail";
 
-  const rollObj = { skill: skill.name, level: skill.tier, dice: diceCount, dc, raw: raw.slice(), explosions, total, tierResult: resultTier };
+  // modifiers: wounds penalty + status/item vs skill traits
+  const { mod, details } = computeModsForSkill(skill);
 
-  // determine if initial dice (excluding explosion chain) are all sixes
-  const initialAllSixes = raw.slice(0, diceCount).every(v => v === 6);
+  const allDice = [...initial, ...explosion];
+  const total = allDice.reduce((a,b)=>a+b, 0);
+  const totalAdj = total + mod;
+
+  const critMargin = RULES?.crit_margin ?? 10;
+  const resultTier = totalAdj >= dc + critMargin ? "crit"
+                    : totalAdj >= dc             ? "success"
+                    :                               "fail";
+
+  const rollObj = {
+    skill: skill.name, level: skill.tier,
+    dice: diceCount, dc,
+    raw: allDice.slice(),
+    explosionCount: explosion.length,
+    total, mod, totalAdj,
+    tierResult: resultTier,
+    modDetails: details
+  };
 
   // show the roll
-  postDock("roll", `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${raw.join(",")}] total ${total} vs DC ${dc} → ${resultTier}`);
+  const modsLabel = details.length ? ` (mods ${mod>=0?'+':''}${mod}: ${details.join(', ')})` : '';
+  postDock("roll", `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${allDice.join(",")}] total ${total}${modsLabel} vs DC ${dc} → ${resultTier}`);
 
   const usedDoAnything = (skill.name === "Do Anything");
 
   // If no luck, resolve immediately and still award XP on fail; Do Anything success => new skill
   if(state.pc.luck <= 0){
     if(resultTier === "fail"){
-      state.pc.xp += 1;
-      postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
+      state.pc.xp += (RULES?.xp_on_fail ?? 1);
+      postDock("system", `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`);
       renderHealth();
       renderSkills(); // keep buttons in sync
     } else if (resultTier === "success" && usedDoAnything){
@@ -389,12 +520,12 @@ function triggerRoll(skill){
     return;
   }
 
-  // Offer Luck reroll if possible (and only once)
+  // Offer Luck reroll if possible (and only once) — reroll lowest among initial pool only
   state.pendingReroll = {
     skillRef: skill,
     rollObj,
     diceCount,
-    used: false
+    initial // keep the original initial dice for lowest selection
   };
   const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
   const controls = document.createElement("div");
@@ -419,29 +550,37 @@ function triggerRoll(skill){
 
 function doLuckReroll(){
   const ctx = state.pendingReroll;
-  if(!ctx || ctx.used) return;
+  if(!ctx) return;
   if(state.pc.luck < 1){ postDock("system","No Luck available."); return; }
 
-  const { rollObj, diceCount } = ctx;
+  const { rollObj, diceCount, initial } = ctx;
 
   // find the index of the lowest among the initial dice (first diceCount entries)
-  const initial = rollObj.raw.slice(0, diceCount);
-  let minVal = Math.min(...initial);
-  let idx = initial.indexOf(minVal);
+  const justInitial = initial.slice(0, diceCount);
+  const minVal = Math.min(...justInitial);
+  const idx = justInitial.indexOf(minVal);
 
   // perform the reroll on that die
-  const newVal = Math.floor(Math.random()*6)+1;
-  rollObj.raw[idx] = newVal;
-  // recompute total: original total minus old + new
-  rollObj.total = rollObj.total - minVal + newVal;
-  // Rules: no mixed; crit if beat DC by 10+
-  rollObj.tierResult = rollObj.total >= rollObj.dc + 10 ? "crit"
-                       : rollObj.total >= rollObj.dc       ? "success"
-                       :                                     "fail";
+  const newVal = d6();
+  // We need to update both the composed raw list in rollObj and our copy of initial[]
+  initial[idx] = newVal;
+
+  // rebuild rollObj.raw from updated initial + any explosion dice that were in the original
+  const hasExplosion = (rollObj.explosionCount||0) > 0;
+  const updatedRaw = hasExplosion
+    ? [...initial, ...rollObj.raw.slice(diceCount)]  // keep original explosion chain intact
+    : [...initial];
+
+  rollObj.raw = updatedRaw;
+  rollObj.total = updatedRaw.reduce((a,b)=>a+b,0);
+  const dc = rollObj.dc;
+  const critMargin = RULES?.crit_margin ?? 10;
+  rollObj.tierResult = (rollObj.total + (rollObj.mod||0)) >= dc + critMargin ? "crit"
+                        : (rollObj.total + (rollObj.mod||0)) >= dc           ? "success"
+                        :                                                       "fail";
 
   state.pc.luck -= 1;
-  ctx.used = true;
-  postDock("system", `Spent 1 Luck → rerolled lowest die ${minVal}→${newVal}. New total ${rollObj.total} → ${rollObj.tierResult}.`);
+  postDock("system", `Spent 1 Luck → rerolled lowest die ${minVal}→${newVal}. New total ${rollObj.total + (rollObj.mod||0)} → ${rollObj.tierResult}.`);
   renderHealth();
 
   finalizeRoll(true);
@@ -457,8 +596,8 @@ function finalizeRoll(wasReroll, providedRollObj){
 
   // Apply XP on fail here for the reroll case (non-reroll/no-luck already handled in triggerRoll)
   if(ctx && ctx.rollObj && ctx.rollObj.tierResult === "fail"){
-    state.pc.xp += 1;
-    postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
+    state.pc.xp += (RULES?.xp_on_fail ?? 1);
+    postDock("system", `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`);
     renderHealth();
     renderSkills();
   }
@@ -506,7 +645,10 @@ async function aiTurnHandler(payload){
     if(ooc.need_roll){
       state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty, aid:0 };
       rollHint.style.display='inline-block';
-      postDock('dm', `Roll ${ooc.skill} ${ooc.dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:''));
+      const dieTier = diceForLevel(
+        (state.pc.skills.find(s=>s.name.toLowerCase()===String(ooc.skill||"").toLowerCase())?.tier) || 1
+      );
+      postDock('dm', `Roll ${ooc.skill} ${dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:''));
     } else {
       postDock('dm', ooc.prompt || '…');
     }
@@ -572,7 +714,7 @@ async function hydrateFromFirestoreByCid(){
       statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
       traits: pc.traits || null,
       skills: Array.isArray(pc.skills) && pc.skills.length
-        ? pc.skills.map(s=>({ name:String(s.name||""), tier:Number(s.tier||1) }))
+        ? pc.skills.map(s=>({ name:String(s.name||""), tier:Number(s.tier||1), traits: Array.isArray(s.traits)? s.traits.slice(0,2) : [] }))
         : state.pc.skills
     };
 
@@ -614,7 +756,14 @@ document.getElementById("sendBtn").onclick = ()=>{
   aiTurnHandler({
     state_summary: buildStateSummary(),
     recent_turns: [],
-    mechanics: {},
+    // pass tiny rules cheat-sheet so the AI picks sane DCs
+    mechanics: {
+      rules: {
+        dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
+        crit_margin: RULES?.crit_margin ?? 10,
+        difficulty_scale: RULES?.difficulty_scale || []
+      }
+    },
     player_input: v
   });
 };
@@ -627,12 +776,16 @@ window.addEventListener('load', async ()=>{
     setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200);
   }, 400);
 
+  // 0) Load rules FIRST so UI labels & AI cheat-sheet are correct
+  await loadRules();
+
   // 1) Load campaign by ?cid=...
   const ok = await hydrateFromFirestoreByCid();
 
-  // 2) Session start: ensure Luck = 1 if not set/persisted higher
-  if (typeof state.pc.luck !== 'number' || state.pc.luck < 1) {
-    state.pc.luck = 1;
+  // 2) Session start: ensure Luck = start value if not set/persisted higher
+  const startLuck = RULES?.luck?.start ?? 1;
+  if (typeof state.pc.luck !== 'number' || state.pc.luck < startLuck) {
+    state.pc.luck = startLuck;
     renderHealth();
   }
 
@@ -642,12 +795,18 @@ window.addEventListener('load', async ()=>{
     return;
   }
 
-  // 4) Start AI with hydrated data (or quick start if none)
+  // 4) Start AI with hydrated data (or quick start if none), include tiny rules card
   aiTurnHandler({
     kickoff: true,
     state_summary: buildStateSummary(),
     recent_turns: [],
-    mechanics: {},
+    mechanics: {
+      rules: {
+        dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
+        crit_margin: RULES?.crit_margin ?? 10,
+        difficulty_scale: RULES?.difficulty_scale || []
+      }
+    },
     player_input: ok ? 'Begin the adventure.' : 'Begin a quick start one-shot.'
   });
 });

@@ -1,69 +1,40 @@
 {
-  "Roll for Rocket Boots": {
-    "Core Mechanic": {
-      "Action Declaration": "Player says what they do.",
-      "Dice Pool": "Roll a number of d6 equal to the skill level.",
-      "Success Check": {
-        "Failure": "Action does not happen.",
-        "Success": "Action happens.",
-        "Critical Success": "Beat DC by 10+.",
-        "Note": "No mixed results—failure is always failure."
-      }
-    },
-    "Starting Point": {
-      "Initial Skill": "Do Anything 1",
-      "Restrictions": "Cannot be leveled up.",
-      "New Skill Creation": "Succeeding creates a new skill related to the action.",
-      "Traits": "New skills are assigned 1–2 traits. Example: Barter → Social, Cunning."
-    },
-    "Skills & Advancement": {
-      "Dice by Level": {
-        "Level 1": "2d6",
-        "Level 2": "3d6",
-        "Level 3": "4d6",
-        "Level 4": "5d6"
-      },
-      "Leveling Rules": {
-        "Gain XP": "Gain 1 XP on each failed roll.",
-        "XP Cost": "XP required equals next level (2 XP for Lv2, 3 XP for Lv3, 4 XP for Lv4).",
-        "Exploding Sixes": "Rolling all 6s: skill levels up, dice explode (add extra d6 for each 6 until none remain)."
-      },
-      "Max Level Rules": {
-        "Cap": "Level 4 is maximum.",
-        "Progression": "Unlock a new, more specific skill instead of leveling further.",
-        "Trigger": "Either roll all 6s on a Level 4 skill OR spend 5 XP."
-      }
-    },
-    "Difficulty Scale": {
-      "Trivial": "1–4",
-      "Average": "5–7",
-      "Difficult": "8–9",
-      "Very Hard": "10–12",
-      "Very Very Hard": "12–15",
-      "Extremely Hard": "16–20",
-      "Mind-Boggling": "20–25",
-      "Pushing Reality": "26–29",
-      "Reality Breaking": "30"
-    },
-    "Status Effects": {
-      "Description": "Statuses add or subtract modifiers based on traits.",
-      "Example": "Drunk = –2 to all Social skills."
-    },
-    "Luck": {
-      "Starting Luck": "Each player begins with 1 Luck Point per session.",
-      "Usage": "Spend Luck to reroll the lowest d6 on a skill check.",
-      "Purchase": "Spend 2 XP to gain an extra Luck Point."
-    },
-    "Items": {
-      "Acquisition": "Can be gifted, bought, or found via play.",
-      "Effect": "Items grant bonuses to skills if traits align.",
-      "Example": "Grappling Hook = +2 to Climb."
-    },
-    "Wounds": {
-      "Level 1": "Superficial — heals with rest or basic care.",
-      "Level 2": "Serious — –3 penalty, requires advanced care, may cause permanent damage.",
-      "Level 3": "Critical — unconscious, bleeding, mortal danger, requires immediate advanced care, causes permanent damage.",
-      "Level 4": "Death — additional wounds beyond Level 3 result in character death."
-    }
+  {
+  "game": "Roll for Rocket Boots",
+  "crit_margin": 10,
+  "dice_by_level": { "1": 2, "2": 3, "3": 4, "4": 5 },
+  "xp_on_fail": 1,
+  "xp_cost_next": { "1": 2, "2": 3, "3": 4, "4": 5 }, 
+  "all_sixes_explodes": true,
+
+  "difficulty_scale": [
+    { "name": "trivial",       "min": 1,  "max": 4  },
+    { "name": "average",       "min": 5,  "max": 7  },
+    { "name": "difficult",     "min": 8,  "max": 9  },
+    { "name": "very hard",     "min": 10, "max": 12 },
+    { "name": "very very hard","min": 12, "max": 15 },
+    { "name": "extremely hard","min": 16, "max": 20 },
+    { "name": "mind-boggling", "min": 20, "max": 25 },
+    { "name": "reality-bending","min": 26, "max": 29 },
+    { "name": "almost impossible","min": 30, "max": 30 }
+  ],
+
+  "luck": { "start": 1, "reroll": "lowest_d6", "xp_cost": 2 },
+
+  "wounds": {
+    "levels": 4,
+    "penalty_at_or_above": 2,
+    "penalty_value": -3
+  },
+
+  "statuses": {
+    "drunk":         { "social": -2 },
+    "adrenaline":    { "athletics": 2 },
+    "exhausted":     { "athletics": -2, "focus": -2 }
+  },
+
+  "items": {
+    "grappling hook": { "climb": 2 },
+    "lockpicks":      { "tinkering": 2 }
   }
 }
