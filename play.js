@@ -34,7 +34,7 @@ const scrollLock = document.getElementById("scrollLock");
 // ---------- AI Config ----------
 const USE_AI = true;
 // TODO: replace <YOUR_PROJECT_ID> after deploying functions
-const AI_URL = "https://us-central1-<YOUR_PROJECT_ID>.cloudfunctions.net/aiTurn";
+const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app";
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
