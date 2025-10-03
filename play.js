@@ -109,7 +109,30 @@ async function loadRules(){
     RULES = defaultRules();
   }
 }
-
+// Strip code fences/OOC and extract the first complete JSON object
+function extractFirstJsonObject(str){
+  if (!str) return "";
+  // Remove triple backtick fences if present
+  str = str.replace(/```json\s*([\s\S]*?)\s*```/gi, "$1")
+           .replace(/```\s*([\s\S]*?)\s*```/g, "$1");
+  // Remove leading "OOC" line if model used your two-part format
+  // e.g., {"ooc":{...}}\n\nNARRATIVE: ...
+  // We'll then search for the first balanced {...}
+  let brace = 0, start = -1;
+  for (let i = 0; i < str.length; i++){
+    const ch = str[i];
+    if (ch === '{'){
+      if (brace === 0) start = i;
+      brace++;
+    } else if (ch === '}'){
+      brace--;
+      if (brace === 0 && start !== -1){
+        return str.slice(start, i + 1);
+      }
+    }
+  }
+  return "";
+}
 function diceForLevel(level){
   // Prefer RULES if loaded; fall back to simple +1 rule (L1=2d6 .. L4=5d6)
   const map = (RULES && RULES.dice_by_level) || {1:2,2:3,3:4,4:5};
@@ -786,18 +809,27 @@ function buildCampaignCard(){
   };
 }
 async function maybeGenerateStarterKit(){
+  ensureDoAnything();
+
   const nonDA = (state.pc.skills || []).filter(s => s.name.toLowerCase() !== "do anything");
   const needSkills = nonDA.length < 3;
   const needItems  = (state.inv || []).length < 3;
+
   if (!needSkills && !needItems) return false;
 
   const card = buildCampaignCard();
   const prompt = [
-    "Create EXACTLY 3 starter skills and 3 starter items for this PC.",
-    "- Skills: name, level=1, 1–2 traits.",
-    "- Items: name, qty, matches=1–2 traits that support skills.",
-    "- Return strict JSON only. Schema:",
-    '{ "skills":[{ "name":"", "level":1, "traits":[""] }], "items":[{ "name":"", "qty":1, "matches":[""] }] }',
+    "Return STRICT JSON only. No OOC, no code fences, no narrative.",
+    "",
+    "Create EXACTLY 3 starter skills and EXACTLY 3 starter items for the PC below.",
+    "Constraints:",
+    "- skills: { name: string, level: 1, traits: array of 1–2 short lowercase tags }",
+    "- items:  { name: string, qty: positive integer, matches: array of 1–2 short lowercase tags }",
+    "- names should be concise and fiction-friendly (no colons).",
+    "- items should correlate to the skills' traits where sensible.",
+    "",
+    'Response schema (no extra fields): {"skills":[{"name":"","level":1,"traits":[""]},{"name":"","level":1,"traits":[""]},{"name":"","level":1,"traits":[""]}],"items":[{"name":"","qty":1,"matches":[""]},{"name":"","qty":1,"matches":[""]},{"name":"","qty":1,"matches":[""]}]}',
+    "",
     "campaign_card:",
     JSON.stringify(card)
   ].join("\n");
@@ -810,37 +842,61 @@ async function maybeGenerateStarterKit(){
       campaign_card: card,
       player_input: prompt
     });
-  } catch (e) { console.warn("Starter kit AI call failed:", e); return false; }
-
-  let jsonStr = text.trim();
-  if (!jsonStr.startsWith("{")) {
-    const first = jsonStr.indexOf("{");
-    const last = jsonStr.lastIndexOf("}");
-    if (first >= 0 && last > first) jsonStr = jsonStr.slice(first, last+1);
+  } catch (e) {
+    console.warn("Starter kit AI call failed:", e);
+    postDock("system", "Starter kit AI call failed; nothing generated.");
+    return false;
   }
+
+  console.log("[StarterKit raw]", text);
+
+  // Try to extract first JSON object
+  const jsonStr = extractFirstJsonObject(text);
   let parsed;
-  try { parsed = JSON.parse(jsonStr); }
-  catch(e){ postDock("system","Starter kit parse failed."); return false; }
-
-  const skills = (parsed.skills||[]).slice(0,3).map(s=>({
-    name:String(s.name||""),
-    tier:1,
-    traits:Array.isArray(s.traits)?s.traits.slice(0,2).map(t=>String(t).toLowerCase()):[]
-  }));
-  const items = (parsed.items||[]).slice(0,3).map(it=>({
-    name:String(it.name||""),
-    qty:Math.max(1,Number(it.qty||1))
-  }));
-
-  if(needSkills) {
-    state.pc.skills = [ ...state.pc.skills.filter(s=>s.name.toLowerCase()==="do anything"), ...skills ];
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e) {
+    console.warn("Starter kit JSON parse failed:", text);
+    postDock("system", "Starter kit parse failed; nothing generated.");
+    return false;
   }
-  if(needItems) { state.inv = items; }
 
-  renderSkills(); renderInv();
-  postDock("system","Starter kit created: 3 skills + 3 items.");
+  const skillsIn = Array.isArray(parsed.skills) ? parsed.skills.slice(0,3) : [];
+  const itemsIn  = Array.isArray(parsed.items)  ? parsed.items.slice(0,3)  : [];
+
+  if (skillsIn.length !== 3 || itemsIn.length !== 3) {
+    postDock("system", "Starter kit invalid; expected 3 skills and 3 items; nothing generated.");
+    return false;
+  }
+
+  const skills = skillsIn.map(s => ({
+    name: String(s.name || "").slice(0,64),
+    tier: 1,
+    traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t).toLowerCase()) : []
+  }));
+  const items  = itemsIn.map(it => ({
+    name: String(it.name || "").slice(0,64),
+    qty: Math.max(1, Number(it.qty || 1)),
+    matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t).toLowerCase()) : []
+  }));
+
+  if (needSkills) {
+    state.pc.skills = [
+      ...state.pc.skills.filter(s => s.name.toLowerCase() === "do anything"),
+      ...skills
+    ];
+  }
+  if (needItems) {
+    state.inv = items;
+  }
+
+  renderSkills();
+  renderInv();
+
+  postDock("system", "Starter kit created: 3 skills + 3 items.");
   return true;
 }
+
 
 // ---------- Kickoff ----------
 async function ensureSignedIn() {
