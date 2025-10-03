@@ -7,7 +7,7 @@ const state = {
     description: "",
     background: "",
     wounds: 0,              // 0..4 (0 = all hearts full, 4 = all empty)
-    luck: 0,                // numeric
+    luck: 0,                // numeric (we'll set to 1 at session start)
     xp: 0,                  // numeric
     statuses: [],
     traits: null,
@@ -83,7 +83,17 @@ function buildStateSummary(){
 function diceForLevel(level){ return Math.max(1, Math.min(5, level + 1)); } // L1=2d6 .. L4=5d6
 function xpCostToNext(level){ return level >= 4 ? 5 : (level + 1); }       // L4 uses specialization cost 5 XP
 
+function ensureDoAnything(){
+  if (!state.pc.skills.some(s => s.name === "Do Anything")) {
+    state.pc.skills.unshift({ name: "Do Anything", tier: 1 });
+  }
+}
+
 function levelUpSkill(skill){
+  if(skill.name === "Do Anything"){ // locked
+    postDock("system", `"Do Anything" cannot be leveled.`);
+    return;
+  }
   if(skill.tier < 4){
     skill.tier += 1;
     postDock("system", `${skill.name} leveled up to Level ${skill.tier}.`);
@@ -97,6 +107,21 @@ function levelUpSkill(skill){
     state.pc.skills.push({ name: specName, tier: 1 });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
   }
+  renderSkills();
+}
+
+function maybeCreateNewSkillFromDoAnything(){
+  const name = prompt(
+    "Success with Do Anything! Name the new related skill (Level 1):",
+    ""
+  );
+  if (!name) return;
+  if (state.pc.skills.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+    postDock("system", `Skill "${name}" already exists.`);
+    return;
+  }
+  state.pc.skills.push({ name, tier: 1 });
+  postDock("system", `New skill created: ${name} (Level 1).`);
   renderSkills();
 }
 
@@ -115,6 +140,8 @@ document.getElementById("tabs").onclick = (e) => {
 
 // ---------- Skills (name is the roll button; right side is Level Up / Specialize) ----------
 function renderSkills(){
+  ensureDoAnything();
+
   const wrap = document.getElementById("panel-skills");
   wrap.innerHTML = "";
 
@@ -123,6 +150,7 @@ function renderSkills(){
     const diceN = diceForLevel(level);
     const cost = xpCostToNext(level);
     const enoughXP = state.pc.xp >= cost;
+    const isDoAnything = s.name === "Do Anything";
 
     const row = document.createElement("div");
     row.className = "skill";
@@ -134,22 +162,28 @@ function renderSkills(){
         <span class="pill">Level ${level}</span>
         <span class="pill">${diceN}d6</span>
       </div>
-      <div class="skillActions">
-        ${level < 4
-          ? `<button type="button" class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
-               Level Up (${cost} XP)
-             </button>`
-          : `<button type="button" class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
-               Specialize (5 XP)
-             </button>`}
-      </div>
+      <div class="skillActions"></div>
     `;
+
+    // Action buttons (lock Do Anything)
+    const actions = row.querySelector(".skillActions");
+    if(isDoAnything){
+      actions.innerHTML = `<button type="button" class="btn-soft tiny" disabled title="Cannot level Do Anything">Locked</button>`;
+    } else if (level < 4){
+      actions.innerHTML = `<button type="button" class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
+        Level Up (${cost} XP)
+      </button>`;
+    } else {
+      actions.innerHTML = `<button type="button" class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
+        Specialize (5 XP)
+      </button>`;
+    }
 
     // Skill name = roll
     row.querySelector(".skillRollBtn").addEventListener("click", ()=> triggerRoll(s));
 
     // Level up / Specialize handlers
-    if(level < 4){
+    if(!isDoAnything && level < 4){
       const btn = row.querySelector("[data-levelup]");
       btn && btn.addEventListener("click", ()=>{
         const need = xpCostToNext(s.tier);
@@ -162,7 +196,7 @@ function renderSkills(){
         renderHealth();
         renderSkills(); // keep button states in sync
       });
-    } else {
+    } else if (!isDoAnything && level >= 4) {
       const btn = row.querySelector("[data-special]");
       btn && btn.addEventListener("click", ()=>{
         if(state.pc.xp < 5){
@@ -281,6 +315,11 @@ function handleCommand(raw){
       postDock("system",`XP ${n>=0?"+":""}${n} → ${state.pc.xp}`);
       return true;
     }
+    case "newsession":
+      state.pc.luck = 1;
+      postDock("system","New session: Luck reset to 1.");
+      renderHealth();
+      return true;
     case "togglerolling":
       state.testRolling = !state.testRolling;
       if(state.testRolling){
@@ -314,7 +353,11 @@ function triggerRoll(skill){
   for(let i=0;i<diceCount;i++) rollD6();
 
   const dc = state.rollPending.difficulty;
-  const resultTier = total >= dc+6 ? "crit" : total >= dc ? "success" : total >= dc-4 ? "mixed" : "fail";
+  // Rules: no mixed; crit if beat DC by 10+
+  const resultTier = total >= dc + 10 ? "crit"
+                   : total >= dc       ? "success"
+                   :                     "fail";
+
   const rollObj = { skill: skill.name, level: skill.tier, dice: diceCount, dc, raw: raw.slice(), explosions, total, tierResult: resultTier };
 
   // determine if initial dice (excluding explosion chain) are all sixes
@@ -323,13 +366,17 @@ function triggerRoll(skill){
   // show the roll
   postDock("roll", `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${raw.join(",")}] total ${total} vs DC ${dc} → ${resultTier}`);
 
-  // If no luck, resolve immediately and still award XP on fail
+  const usedDoAnything = (skill.name === "Do Anything");
+
+  // If no luck, resolve immediately and still award XP on fail; Do Anything success => new skill
   if(state.pc.luck <= 0){
     if(resultTier === "fail"){
       state.pc.xp += 1;
       postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
       renderHealth();
       renderSkills(); // keep buttons in sync
+    } else if (resultTier === "success" && usedDoAnything){
+      maybeCreateNewSkillFromDoAnything();
     }
     // All-6s on initial pool → level up before narration
     if(initialAllSixes){
@@ -387,9 +434,10 @@ function doLuckReroll(){
   rollObj.raw[idx] = newVal;
   // recompute total: original total minus old + new
   rollObj.total = rollObj.total - minVal + newVal;
-  rollObj.tierResult = rollObj.total >= rollObj.dc+6 ? "crit" :
-                       rollObj.total >= rollObj.dc    ? "success" :
-                       rollObj.total >= rollObj.dc-4  ? "mixed" : "fail";
+  // Rules: no mixed; crit if beat DC by 10+
+  rollObj.tierResult = rollObj.total >= rollObj.dc + 10 ? "crit"
+                       : rollObj.total >= rollObj.dc       ? "success"
+                       :                                     "fail";
 
   state.pc.luck -= 1;
   ctx.used = true;
@@ -413,6 +461,11 @@ function finalizeRoll(wasReroll, providedRollObj){
     postDock("system", `+1 XP for the failed roll → ${state.pc.xp}`);
     renderHealth();
     renderSkills();
+  }
+
+  // If we had a pending reroll context and ended with success on Do Anything, offer new skill
+  if (ctx && ctx.skillRef && ctx.skillRef.name === "Do Anything" && ctx.rollObj.tierResult === "success") {
+    maybeCreateNewSkillFromDoAnything();
   }
 
   // Test mode: stop here (no narration)
@@ -523,6 +576,9 @@ async function hydrateFromFirestoreByCid(){
         : state.pc.skills
     };
 
+    // Ensure Do Anything is present post-hydration
+    ensureDoAnything();
+
     // Re-render UI with real data
     renderSkills(); renderInv(); renderHealth();
     return true;
@@ -574,13 +630,19 @@ window.addEventListener('load', async ()=>{
   // 1) Load campaign by ?cid=...
   const ok = await hydrateFromFirestoreByCid();
 
-  // 2) If test mode, don't call AI
+  // 2) Session start: ensure Luck = 1 if not set/persisted higher
+  if (typeof state.pc.luck !== 'number' || state.pc.luck < 1) {
+    state.pc.luck = 1;
+    renderHealth();
+  }
+
+  // 3) If test mode, don't call AI
   if(state.testRolling){
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
 
-  // 3) Start AI with hydrated data (or quick start if none)
+  // 4) Start AI with hydrated data (or quick start if none)
   aiTurnHandler({
     kickoff: true,
     state_summary: buildStateSummary(),
