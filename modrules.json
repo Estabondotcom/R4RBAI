@@ -1,5 +1,4 @@
 {
-  {
   "game": "Roll for Rocket Boots",
   "crit_margin": 10,
   "dice_by_level": { "1": 2, "2": 3, "3": 4, "4": 5 },
