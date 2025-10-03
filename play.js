@@ -776,6 +776,79 @@ document.getElementById("sendBtn").onclick = ()=>{
 };
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
+function buildCampaignCard(){
+  const { campaign, pc } = state;
+  return {
+    title: campaign.title || "Untitled Campaign",
+    theme: campaign.theme || "",
+    setting: campaign.setting || "",
+    premise: campaign.premise || "",
+    pc: {
+      name: pc.name || "",
+      background: pc.background || "",
+      description: pc.description || "",
+      statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
+      traits: pc.traits || null
+    }
+  };
+}
+async function maybeGenerateStarterKit(){
+  const nonDA = (state.pc.skills || []).filter(s => s.name.toLowerCase() !== "do anything");
+  const needSkills = nonDA.length < 3;
+  const needItems  = (state.inv || []).length < 3;
+  if (!needSkills && !needItems) return false;
+
+  const card = buildCampaignCard();
+  const prompt = [
+    "Create EXACTLY 3 starter skills and 3 starter items for this PC.",
+    "- Skills: name, level=1, 1–2 traits.",
+    "- Items: name, qty, matches=1–2 traits that support skills.",
+    "- Return strict JSON only. Schema:",
+    '{ "skills":[{ "name":"", "level":1, "traits":[""] }], "items":[{ "name":"", "qty":1, "matches":[""] }] }',
+    "campaign_card:",
+    JSON.stringify(card)
+  ].join("\n");
+
+  let text;
+  try {
+    text = await callAiTurn({
+      kickoff: false,
+      state_summary: buildStateSummary(),
+      campaign_card: card,
+      player_input: prompt
+    });
+  } catch (e) { console.warn("Starter kit AI call failed:", e); return false; }
+
+  let jsonStr = text.trim();
+  if (!jsonStr.startsWith("{")) {
+    const first = jsonStr.indexOf("{");
+    const last = jsonStr.lastIndexOf("}");
+    if (first >= 0 && last > first) jsonStr = jsonStr.slice(first, last+1);
+  }
+  let parsed;
+  try { parsed = JSON.parse(jsonStr); }
+  catch(e){ postDock("system","Starter kit parse failed."); return false; }
+
+  const skills = (parsed.skills||[]).slice(0,3).map(s=>({
+    name:String(s.name||""),
+    tier:1,
+    traits:Array.isArray(s.traits)?s.traits.slice(0,2).map(t=>String(t).toLowerCase()):[]
+  }));
+  const items = (parsed.items||[]).slice(0,3).map(it=>({
+    name:String(it.name||""),
+    qty:Math.max(1,Number(it.qty||1))
+  }));
+
+  if(needSkills) {
+    state.pc.skills = [ ...state.pc.skills.filter(s=>s.name.toLowerCase()==="do anything"), ...skills ];
+  }
+  if(needItems) { state.inv = items; }
+
+  renderSkills(); renderInv();
+  postDock("system","Starter kit created: 3 skills + 3 items.");
+  return true;
+}
+
 // ---------- Kickoff ----------
 async function ensureSignedIn() {
   return new Promise((resolve, reject) => {
@@ -821,6 +894,10 @@ const ok = await hydrateFromFirestoreByCid();
     state.pc.luck = startLuck;
     renderHealth();
   }
+const ok = await hydrateFromFirestoreByCid();
+
+// Create starter kit if missing
+await maybeGenerateStarterKit();
 
   // 3) If test mode, don't call AI
   if(state.testRolling){
