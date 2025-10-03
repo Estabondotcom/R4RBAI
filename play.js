@@ -478,9 +478,9 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10
 
 // If your app is already initialized elsewhere on this page, this will be a no-op
 const fbApp = getApps().length ? getApps()[0] : initializeApp({
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID"
+  apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
+  authDomain: "r4rbai.firebaseapp.com",
+  projectId: "r4rbai"
 });
 const db = getFirestore(fbApp);
 
