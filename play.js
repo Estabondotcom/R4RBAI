@@ -21,7 +21,7 @@ const state = {
     { name: "Rations", qty: 2 }
   ],
   rollPending: null,          // set by AI when a roll is requested
-  testRolling: false,         // your original test mode flag
+  testRolling: false,         // test mode flag: client-only rolls, no narration
   pendingReroll: null         // holds roll context while offering luck reroll
 };
 
@@ -30,6 +30,38 @@ const bookEl = document.getElementById("book");
 const dockEl = document.getElementById("dockMessages");
 const rollHint = document.getElementById("rollHint");
 const scrollLock = document.getElementById("scrollLock");
+
+// ---------- AI Config ----------
+const USE_AI = true;
+// TODO: replace <YOUR_PROJECT_ID> after deploying functions
+const AI_URL = "https://us-central1-<YOUR_PROJECT_ID>.cloudfunctions.net/aiTurn";
+
+async function callAiTurn(payload){
+  const res = await fetch(AI_URL, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(payload)
+  });
+  if(!res.ok){
+    const t = await res.text().catch(()=> "");
+    throw new Error(`aiTurn failed (${res.status}): ${t}`);
+  }
+  const { text } = await res.json();
+  return text;
+}
+
+function buildStateSummary(){
+  return {
+    pc: {
+      name: state.pc.name,
+      xp: state.pc.xp,
+      luck: state.pc.luck,
+      wounds: state.pc.wounds,
+      statuses: state.pc.statuses,
+      skills: state.pc.skills.map(s=>({ name: s.name, level: s.tier }))
+    }
+  };
+}
 
 // ---------- Helpers ----------
 function diceForLevel(level){ return Math.max(1, Math.min(5, level + 1)); } // L1=2d6 .. L4=5d6
@@ -238,7 +270,7 @@ function handleCommand(raw){
     case "togglerolling":
       state.testRolling = !state.testRolling;
       if(state.testRolling){
-        state.rollPending = { skill:"Test", difficulty:14 }; // generic DC so you can roll right away
+        state.rollPending = { skill:"Test", difficulty:14, aid:0 }; // generic DC so you can roll right away
         rollHint.style.display='inline-block';
         postDock('system','Test rolling: ON — tap any Skill name to roll vs DC 14. (No narration in test mode.)');
       } else {
@@ -369,16 +401,16 @@ function finalizeRoll(wasReroll, providedRollObj){
     renderSkills();
   }
 
-  // If test mode, stop here (no narration)
+  // Test mode: stop here (no narration)
   if(state.testRolling){
     postDock("system","(Test mode) Roll complete — no narration.");
     state.pendingReroll = null;
     return;
   }
 
-  // Send to "AI"
+  // Send to AI
   if(payload){
-    fakeAiTurn({
+    aiTurnHandler({
       player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.",
       mechanics: { roll_result: payload }
     });
@@ -386,58 +418,38 @@ function finalizeRoll(wasReroll, providedRollObj){
   state.pendingReroll = null;
 }
 
-// ---------- Simulated AI (your original flavor restored) ----------
-function fakeModelResponse(payload){
-  if(payload.kickoff){
-    return `{"ooc":{"need_roll":false,"prompt":"Sirens rise along the wharf. What do you do first?"}}
+// ---------- AI turn handler (no fake text) ----------
+async function aiTurnHandler(payload){
+  try{
+    const text = USE_AI ? await callAiTurn({
+      ...payload,
+      state_summary: buildStateSummary(),
+      recent_turns: [] // (optional) wire up later if you log turns
+    }) : null;
 
-NARRATIVE:
-Fog boils off the harbor as a hoist bell clangs over the canals. Emberquay’s iron ribs creak—skytracks groaning, gulls wheeling like scraps of paper. You shoulder through dockhands, cloak stitched at the edges; heights gnaw at your gut and the city ignores it. Word came at dawn: the stolen device is on foot. Two crews shadow the courier. If it reaches the Old Battery, the sky will peel open like wet parchment.
+    if(!text){
+      postDock('system', 'AI unavailable.');
+      return;
+    }
+    const [firstLine, ...rest] = text.split(/\r?\n/);
+    let ooc = null;
+    try { ooc = JSON.parse(firstLine).ooc; }
+    catch(e){ postDock('system','(AI format error)'); return; }
 
-Lanterns flare across the crane yard. The rooftops beyond offer a jagged run of chimneys and wash lines. Somewhere ahead, a runner slips through steam—fast, cautious, burdened.`;
+    if(ooc.need_roll){
+      state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty, aid:0 };
+      rollHint.style.display='inline-block';
+      postDock('dm', `Roll ${ooc.skill} ${ooc.dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:''));
+    } else {
+      postDock('dm', ooc.prompt || '…');
+    }
+    const restJoined = rest.join('\n');
+    const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
+    if(narrative) appendToBook(narrative);
+  }catch(err){
+    console.error(err);
+    postDock('system', 'AI request failed.');
   }
-  if(payload.mechanics && payload.mechanics.roll_result){
-    const r = payload.mechanics.roll_result;
-    const map = {
-      crit: ["You move like a rumor, untouchable.", "Opportunity blooms ahead—an open door and a dropped key."],
-      success: ["You ghost between pallets; the lookout turns too late.", "Distance closes; breath steadies; the runner is in reach."],
-      mixed: ["You make ground, but a bell tolls—eyes swing your way.", "You’ll have to choose: cover or speed."],
-      fail: ["Boots slam steel; a shout goes up; light spears the fog.", "The runner gains ground while you dive for cover."]
-    };
-    const lines = map[r.tierResult];
-    return `{"ooc":{"need_roll":false,"prompt":"Catwalk or lower walkway—where do you push next?"}}
-
-NARRATIVE:
-${lines[0]} Pallets blur—tar, hemp, salt. A crane groans; the world tips into the yawning canal and you ride the sway, knees soft, hands skimming rail. ${lines[1]} The harbor exhales—sirens doppler, gulls scatter—and the city asks its only question again: how badly do you want this?`;
-  }
-  const askRoll = Math.random()<0.5;
-  if(askRoll){
-    const s = state.pc.skills[Math.floor(Math.random()*state.pc.skills.length)];
-    const dc = 12 + Math.floor(Math.random()*7);
-    return `{"ooc":{"need_roll":true,"skill":"${s.name}","dieTier":${s.tier},"difficulty":${dc},"note":"Mixed success creates a complication."}}`;
-  }else{
-    return `{"ooc":{"need_roll":false,"prompt":"What do you do?"}}
-
-NARRATIVE:
-Wind tugs at laundry spans as a barge thumps the pilings. Somewhere ahead, the quarry slips through steam, careful as a pickpocket’s smile.`;
-  }
-}
-
-async function fakeAiTurn(payload){
-  const text = fakeModelResponse(payload);
-  const [firstLine, ...rest] = text.split(/\r?\n/);
-  let ooc = null;
-  try { ooc = JSON.parse(firstLine).ooc; } catch(e){ postDock('system','(Format error)'); return; }
-  if(ooc.need_roll){
-    state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty };
-    rollHint.style.display='inline-block';
-    postDock('dm', `Roll ${ooc.skill} ${ooc.dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:''));
-  } else {
-    postDock('dm', ooc.prompt || '…');
-  }
-  const restJoined = rest.join('\n');
-  const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
-  if(narrative) appendToBook(narrative);
 }
 
 // ---------- Chat input ----------
@@ -455,12 +467,36 @@ document.getElementById("sendBtn").onclick = ()=>{
     postDock('system','A roll is pending. Tap a Skill name in the tray to roll.');
     return;
   }
-  fakeAiTurn({ state_summary:{}, recent_turns:[], mechanics:{}, player_input:v });
+
+  if(state.testRolling){
+    // No AI in test mode; just acknowledge.
+    postDock('system','(Test mode) Message received.');
+    return;
+  }
+
+  aiTurnHandler({
+    state_summary: buildStateSummary(),
+    recent_turns: [],
+    mechanics: {},
+    player_input: v
+  });
 };
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
 // ---------- Kickoff ----------
 window.addEventListener('load', ()=>{
   setTimeout(()=>{ document.getElementById('tray').classList.add('open'); setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200); }, 400);
-  fakeAiTurn({ kickoff:true, state_summary:{}, recent_turns:[], mechanics:{}, player_input:'Begin the adventure.' });
+
+  if(state.testRolling){
+    postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
+    return;
+  }
+
+  aiTurnHandler({
+    kickoff: true,
+    state_summary: buildStateSummary(),
+    recent_turns: [],
+    mechanics: {},
+    player_input:'Begin the adventure.'
+  });
 });
