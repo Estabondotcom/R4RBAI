@@ -1,4 +1,4 @@
-// functions/index.js  (Node 22; firebase-functions v6 ESM)
+// functions/index.js
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import admin from "firebase-admin";
@@ -8,7 +8,7 @@ import OpenAI from "openai";
 admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
-// ----- Existing: deleteCampaign (kept as-is) -----
+/* --- your existing callable (kept) --- */
 export const deleteCampaign = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
@@ -31,11 +31,9 @@ export const deleteCampaign = onCall(async (request) => {
   return { ok: true };
 });
 
-// ----- New: aiTurn (HTTPS) -----
+/* --- AI GM HTTPS endpoint --- */
 const ALLOWED_ORIGIN = "https://estabondotcom.github.io"; // your site origin
 const cors = corsLib({ origin: ALLOWED_ORIGIN });
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
   cors(req, res, async () => {
@@ -48,37 +46,34 @@ export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
     if (req.method !== "POST") return res.status(405).send("POST only");
 
     try {
+      // ✅ Instantiate OpenAI **inside** the handler, after secrets are available
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
       const body = req.body || {};
       const system = `
 You are the AI GM for "Roll for Rocket Boots".
 Reply in two parts:
-1) First line: a JSON object with key "ooc" ONLY, e.g.:
-{"ooc":{"need_roll":true|false,"skill":"<Skill>","dieTier":1..4,"difficulty":8..24,"note":"optional"}}
-2) Then a blank line, then:
-NARRATIVE:
-<2–4 paragraphs of evocative prose>
+1) First line: {"ooc":{"need_roll":true|false,"skill":"<Skill>","dieTier":1..4,"difficulty":8..24,"note":"optional","prompt":"optional"}}
+2) Then a blank line and "NARRATIVE:" with 2–4 short, evocative paragraphs.
 
 Rules:
 - Do NOT roll dice; the client handles mechanics.
-- If you need a roll, set need_roll=true and include skill, dieTier, difficulty.
-- If a roll result is provided (body.mechanics.roll_result), set need_roll=false and narrate consequences.
-- Keep continuity with body.state_summary and body.recent_turns.
+- If mechanics.roll_result is provided, set need_roll=false and narrate consequences.
+- Keep continuity with state_summary and recent_turns.
       `.trim();
 
-      const messages = [
-        { role: "system", content: system },
-        { role: "user", content: JSON.stringify(body) }
-      ];
-
-      const r = await openai.chat.completions.create({
+      const resp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0.8,
         max_tokens: 600,
-        messages
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: JSON.stringify(body) }
+        ]
       });
 
       const text =
-        r.choices?.[0]?.message?.content?.trim() ||
+        resp.choices?.[0]?.message?.content?.trim() ||
         `{"ooc":{"need_roll":false,"prompt":"What do you do?"}}\n\nNARRATIVE:\nThe scene waits.`;
 
       res.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
