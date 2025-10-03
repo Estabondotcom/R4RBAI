@@ -1,33 +1,26 @@
 // ---------- Minimal client state ----------
 const state = {
-  campaign: { id:"", title:"", theme:"", setting:"", premise:"" },
+  campaign: { id: "", title: "", theme: "", setting: "", premise: "" },
   campaignId: crypto.randomUUID(),
   pc: {
-    name: "Rin Kestrel",
+    name: "",
     description: "",
     background: "",
-    wounds: 0,              // 0..4 (0 = all hearts full, 4 = all empty)
-    luck: 0,                // numeric (we'll set to 1 at session start)
-    xp: 0,                  // numeric
+    wounds: 0,          // 0..4 (0 = all hearts full, 4 = all empty)
+    luck: 0,            // numeric (we'll set to 1 at session start)
+    xp: 0,              // numeric
     statuses: [],
     traits: null,
     portraitDataUrl: "",
     // 'tier' == Level (1..4). Dice = level + 1 (L1=2d6 ... L4=5d6)
-    skills: [
-      { name: "Athletics", tier: 2, traits: ["athletics"] },
-      { name: "Streetwise", tier: 3, traits: ["social","cunning"] },
-      { name: "Improvisation", tier: 1, traits: ["improv"] }
-    ]
+    skills: []          // ← empty; we'll add Do Anything dynamically
   },
-  inv: [
-    { name: "Glider cloak", qty: 1 },
-    { name: "Lockpicks", qty: 1 },
-    { name: "Rations", qty: 2 }
-  ],
-  rollPending: null,          // set by AI when a roll is requested
-  testRolling: false,         // test mode flag: client-only rolls, no narration
-  pendingReroll: null         // holds roll context while offering luck reroll
+  inv: [],              // ← empty; starter kit or Firestore will populate
+  rollPending: null,
+  testRolling: false,
+  pendingReroll: null
 };
+
 
 // ---------- DOM refs ----------
 const bookEl = document.getElementById("book");
