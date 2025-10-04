@@ -180,7 +180,7 @@ pcDraft = {
   portraitDataUrl: imageDataUrl || null,
   portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
   traits: {
-    Constitution: traitValues.Constitution,
+    Charisma: traitValues.Charisma,
     Strength:     traitValues.Strength,
     Dexterity:    traitValues.Dexterity,
     Intelligence: traitValues.Intelligence,
@@ -249,7 +249,7 @@ function renderCampaignItem(id, data) {
   const title = escapeHtml(data.name || "Untitled Campaign");
   const updated = fmtDate(data.updatedAt);
   const pcLine = data.pc
-    ? `${escapeHtml(data.pc.name)} — CON:${data.pc.traits?.Constitution ?? "-"} STR:${data.pc.traits?.Strength ?? "-"} DEX:${data.pc.traits?.Dexterity ?? "-"} INT:${data.pc.traits?.Intelligence ?? "-"} MAG:${data.pc.traits?.Magic ?? "-"}`
+    ? `${escapeHtml(data.pc.name)} — Cha:${data.pc.traits?.Charisma ?? "-"} STR:${data.pc.traits?.Strength ?? "-"} DEX:${data.pc.traits?.Dexterity ?? "-"} INT:${data.pc.traits?.Intelligence ?? "-"} MAG:${data.pc.traits?.Magic ?? "-"}`
     : "—";
 
   div.innerHTML = `
