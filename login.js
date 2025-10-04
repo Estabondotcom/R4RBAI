@@ -53,19 +53,10 @@ async function handleSignUp(){
     setOk('Account created! Redirecting…'); goNext();
   } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
 }
-async function handleGuest(){
-  setErr(''); setOk(''); setStatus('Continuing as guest…');
-  try {
-    await setPersistence(auth, browserLocalPersistence);
-    const cred = await signInAnonymously(auth);
-    await ensureUserDoc(cred.user);
-    setOk('Guest session active. Redirecting…'); goNext();
-  } catch (e){ setErr(humanAuthError(e)); } finally { setStatus(''); }
-}
+
 
 $('signinBtn').onclick = handleSignIn;
 $('signupBtn').onclick = handleSignUp;
-$('guestBtn').onclick = handleGuest;
 
 onAuthStateChanged(auth, (user)=>{ if (user) goNext(); });
 
