@@ -55,7 +55,7 @@ function fmtDate(ts) { try { if (ts?.toMillis) return new Date(ts.toMillis()).to
 const TRAITS     = ["Constitution","Strength","Dexterity","Intelligence","Magic"];
 const MAX_PER    = 5;
 const START_BASE = { Constitution:1, Strength:1, Dexterity:1, Intelligence:1, Magic:0 };
-const POOL       = 8; // spendable on top of START_BASE
+const POOL       = 6; // spendable on top of START_BASE
 
 let traitValues = { ...START_BASE };
 let pointsRemaining = POOL;
