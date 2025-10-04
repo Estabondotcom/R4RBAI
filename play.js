@@ -404,11 +404,12 @@ function ensureDoAnything(){
   }
 }
 
-function levelUpSkill(skill){
+async function levelUpSkill(skill){
   if(skill.name === "Do Anything"){ postDock("system", `"Do Anything" cannot be leveled.`); return; }
   if(skill.tier < 4){
     skill.tier += 1;
     postDock("system", `${skill.name} leveled up to Level ${skill.tier}.`);
+    await savePcSnapshot();
     ensureCampaignDoc().then(()=> saveTurn("system", `${skill.name} leveled to ${skill.tier}`));
   } else {
     const base = skill.name.replace(/\s*\(Spec.*\)$/,'');
@@ -418,6 +419,7 @@ function levelUpSkill(skill){
     ) || `${base}: Specialization`;
     state.pc.skills.push({ name: specName, tier: 1, traits: skillTraits(skill) });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
+    await savePcSnapshot();
     ensureCampaignDoc().then(()=> saveTurn("system", `Unlocked specialization: ${specName}`));
   }
   renderSkills();
