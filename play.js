@@ -13,14 +13,13 @@ const state = {
     traits: null,
     portraitDataUrl: "",
     // 'tier' == Level (1..4). Dice = level + 1 (L1=2d6 ... L4=5d6)
-    skills: []          // ← empty; we'll add Do Anything dynamically
+    skills: []          // empty; "Do Anything" is added dynamically
   },
-  inv: [],              // ← empty; starter kit or Firestore will populate
+  inv: [],              // empty; Firestore/starter kit will populate
   rollPending: null,
   testRolling: false,
   pendingReroll: null
 };
-
 
 // ---------- DOM refs ----------
 const bookEl = document.getElementById("book");
@@ -30,7 +29,7 @@ const scrollLock = document.getElementById("scrollLock");
 
 // ---------- AI Config ----------
 const USE_AI = true;
-// Use your deployed v2 Cloud Run URL here:
+// Your deployed AI endpoint:
 const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app";
 
 async function callAiTurn(payload){
@@ -72,7 +71,87 @@ function buildStateSummary(){
   };
 }
 
-// ---------- Helpers ----------
+function buildCampaignCard(){
+  const { campaign, pc } = state;
+  return {
+    title: campaign.title || "Untitled Campaign",
+    theme: campaign.theme || "",
+    setting: campaign.setting || "",
+    premise: campaign.premise || "",
+    pc: {
+      name: pc.name || "",
+      background: pc.background || "",
+      description: pc.description || "",
+      statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
+      traits: pc.traits || null
+    }
+  };
+}
+
+// ---------- Firestore helpers (save/load turns) ----------
+function campaignDocRef() {
+  const id = state.campaign?.id || state.campaignId;
+  return doc(db, "campaigns", id);
+}
+
+async function ensureCampaignDoc() {
+  const ref = campaignDocRef();
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, {
+      title: state.campaign?.title || "",
+      theme: state.campaign?.theme || "",
+      setting: state.campaign?.setting || "",
+      premise: state.campaign?.premise || "",
+      createdAt: serverTimestamp()
+    }, { merge: true });
+  }
+}
+
+async function saveTurn(role, text, extras = {}) {
+  if (!state.campaign?.id && !state.campaignId) return;
+  const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
+  await addDoc(ref, {
+    role,
+    text,
+    ...extras,
+    createdAt: serverTimestamp()
+  });
+}
+
+// returns count of turns loaded
+async function loadTurnsAndRender() {
+  if (!state.campaign?.id && !state.campaignId) return 0;
+  const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
+  const q = query(ref, orderBy("createdAt", "asc"));
+  const snap = await getDocs(q);
+
+  // Clear the UI first (book + dock), then replay
+  bookEl.innerHTML = "";
+  dockEl.innerHTML = "";
+
+  let count = 0;
+  snap.forEach(docSnap => {
+    const t = docSnap.data(); count++;
+    switch (t.role) {
+      case "you":
+        postDock("you", t.text || "");
+        break;
+      case "ooc":
+        postDock("dm", t.text || "");
+        break;
+      case "dm":
+        if (t.text) appendToBook(t.text);
+        break;
+      case "system":
+      case "roll":
+      default:
+        if (t.text) postDock(t.role || "system", t.text);
+    }
+  });
+  return count;
+}
+
 // ---------- Rules loading/compilation ----------
 let RULES = null;
 
@@ -96,7 +175,6 @@ async function loadRules(){
     const res = await fetch("modrules.json");
     if(!res.ok) throw new Error(res.statusText);
     const raw = await res.json();
-    // tiny normalization
     RULES = {
       ...defaultRules(),
       ...raw,
@@ -109,15 +187,12 @@ async function loadRules(){
     RULES = defaultRules();
   }
 }
+
 // Strip code fences/OOC and extract the first complete JSON object
 function extractFirstJsonObject(str){
   if (!str) return "";
-  // Remove triple backtick fences if present
   str = str.replace(/```json\s*([\s\S]*?)\s*```/gi, "$1")
            .replace(/```\s*([\s\S]*?)\s*```/g, "$1");
-  // Remove leading "OOC" line if model used your two-part format
-  // e.g., {"ooc":{...}}\n\nNARRATIVE: ...
-  // We'll then search for the first balanced {...}
   let brace = 0, start = -1;
   for (let i = 0; i < str.length; i++){
     const ch = str[i];
@@ -133,8 +208,8 @@ function extractFirstJsonObject(str){
   }
   return "";
 }
+
 function diceForLevel(level){
-  // Prefer RULES if loaded; fall back to simple +1 rule (L1=2d6 .. L4=5d6)
   const map = (RULES && RULES.dice_by_level) || {1:2,2:3,3:4,4:5};
   const n = map[level] ?? (level+1);
   return Math.max(1, Math.min(6, n));
@@ -151,13 +226,13 @@ function computeModsForSkill(skill){
   const details = [];
   const traits = skillTraits(skill);
 
-  // Wounds global penalty (PDF: wounds level 2 = -3 to all checks)
+  // Wounds penalty
   if (RULES?.wounds && state.pc.wounds >= (RULES.wounds.penalty_at_or_above ?? 2)) {
     const v = RULES.wounds.penalty_value ?? -3;
     mod += v; details.push(`wounds ${v}`);
   }
 
-  // Status effects from state.pc.statuses (strings), mapped via RULES.statuses
+  // Status effects via RULES.statuses
   for (const s of (state.pc.statuses || [])) {
     const defs = RULES.statuses?.[String(s).toLowerCase()];
     if (!defs) continue;
@@ -166,13 +241,19 @@ function computeModsForSkill(skill){
     }
   }
 
-  // Item bonuses from state.inv, mapped via RULES.items
+  // Item bonuses via RULES.items and item.matches tags (+1 each match)
   for (const it of (state.inv || [])) {
-    const defs = RULES.items?.[String(it.name||"").toLowerCase()];
-    if (!defs) continue;
     const qty = it.qty || 1;
-    for (const [tag,val] of Object.entries(defs)) {
-      if (traits.includes(tag.toLowerCase())) { mod += (val * qty); details.push(`${it.name} ${val*qty}`); }
+    const defs = RULES.items?.[String(it.name||"").toLowerCase()];
+    if (defs) {
+      for (const [tag,val] of Object.entries(defs)) {
+        if (traits.includes(tag.toLowerCase())) { mod += (val * qty); details.push(`${it.name} ${val*qty}`); }
+      }
+    }
+    if (Array.isArray(it.matches) && it.matches.length) {
+      for (const tag of it.matches) {
+        if (traits.includes(String(tag).toLowerCase())) { mod += 1; details.push(`${it.name} +1`); }
+      }
     }
   }
 
@@ -188,15 +269,12 @@ function ensureDoAnything(){
 }
 
 function levelUpSkill(skill){
-  if(skill.name === "Do Anything"){ // locked
-    postDock("system", `"Do Anything" cannot be leveled.`);
-    return;
-  }
+  if(skill.name === "Do Anything"){ postDock("system", `"Do Anything" cannot be leveled.`); return; }
   if(skill.tier < 4){
     skill.tier += 1;
     postDock("system", `${skill.name} leveled up to Level ${skill.tier}.`);
+    ensureCampaignDoc().then(()=> saveTurn("system", `${skill.name} leveled to ${skill.tier}`));
   } else {
-    // Specialize from cap
     const base = skill.name.replace(/\s*\(Spec.*\)$/,'');
     const specName = prompt(
       `Create a specialization for "${base}" (e.g., "${base}: Rooftop Parkour")`,
@@ -204,6 +282,7 @@ function levelUpSkill(skill){
     ) || `${base}: Specialization`;
     state.pc.skills.push({ name: specName, tier: 1, traits: skillTraits(skill) });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
+    ensureCampaignDoc().then(()=> saveTurn("system", `Unlocked specialization: ${specName}`));
   }
   renderSkills();
 }
@@ -213,13 +292,14 @@ function maybeCreateNewSkillFromDoAnything(){
   if (!name) return;
   if (state.pc.skills.some(s => s.name.toLowerCase() === name.toLowerCase())) {
     postDock("system", `Skill "${name}" already exists.`);
+    ensureCampaignDoc().then(()=> saveTurn("system", `Skill "${name}" already exists (Do Anything).`));
     return;
   }
   const traitStr = prompt("Add 1–2 traits for this skill (comma-separated, e.g., social,cunning):", "");
-  const traits = (traitStr||"")
-    .split(",").map(s=>s.trim()).filter(Boolean).slice(0,2);
+  const traits = (traitStr||"").split(",").map(s=>s.trim()).filter(Boolean).slice(0,2);
   state.pc.skills.push({ name, tier: 1, traits });
   postDock("system", `New skill created: ${name} (Level 1) — traits: ${traits.join(", ")||"—"}.`);
+  ensureCampaignDoc().then(()=> saveTurn("system", `New skill created: ${name} (L1) traits=${traits.join(", ")||"—"}`));
   renderSkills();
 }
 
@@ -236,7 +316,7 @@ document.getElementById("tabs").onclick = (e) => {
   document.getElementById(map[e.target.dataset.tab]).style.display = "block";
 };
 
-// ---------- Skills (name is the roll button; right side is Level Up / Specialize) ----------
+// ---------- Skills UI ----------
 function renderSkills(){
   ensureDoAnything();
 
@@ -268,7 +348,7 @@ function renderSkills(){
       <div class="skillActions"></div>
     `;
 
-    // Action buttons (lock Do Anything)
+    // Action buttons
     const actions = row.querySelector(".skillActions");
     if(isDoAnything){
       actions.innerHTML = `<button type="button" class="btn-soft tiny" disabled title="Cannot level Do Anything">Locked</button>`;
@@ -282,22 +362,21 @@ function renderSkills(){
       </button>`;
     }
 
-    // Skill name = roll
     row.querySelector(".skillRollBtn").addEventListener("click", ()=> triggerRoll(s));
 
-    // Level up / Specialize handlers
     if(!isDoAnything && level < 4){
       const btn = row.querySelector("[data-levelup]");
       btn && btn.addEventListener("click", ()=>{
         const need = xpCostToNext(s.tier);
         if(state.pc.xp < need){
           postDock("system", `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
+          ensureCampaignDoc().then(()=> saveTurn("system", `Insufficient XP to level ${s.name}`));
           return;
         }
         state.pc.xp -= need;
         levelUpSkill(s);
         renderHealth();
-        renderSkills(); // keep button states in sync
+        renderSkills();
       });
     } else if (!isDoAnything && level >= 4) {
       const btn = row.querySelector("[data-special]");
@@ -305,12 +384,13 @@ function renderSkills(){
         const need = xpCostToNext(s.tier);
         if(state.pc.xp < need){
           postDock("system", `Need ${need} XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
+          ensureCampaignDoc().then(()=> saveTurn("system", `Insufficient XP to specialize ${s.name}`));
           return;
         }
         state.pc.xp -= need;
-        levelUpSkill(s);   // at L4 this creates a specialization
+        levelUpSkill(s);
         renderHealth();
-        renderSkills(); // keep button states in sync
+        renderSkills();
       });
     }
 
@@ -359,13 +439,15 @@ function renderHealth(){
       const cost = RULES?.luck?.xp_cost ?? 2;
       if(state.pc.xp < cost){
         postDock("system",`Not enough XP to buy Luck (need ${cost} XP).`);
+        ensureCampaignDoc().then(()=> saveTurn("system",`Not enough XP to buy Luck (${cost})`));
         return;
       }
       state.pc.xp -= cost;
       state.pc.luck += 1;
       postDock("system",`Spent ${cost} XP → +1 Luck.`);
+      ensureCampaignDoc().then(()=> saveTurn("system",`Bought 1 Luck for ${cost} XP`));
       renderHealth();
-      renderSkills();   // refresh buttons after XP changes
+      renderSkills();
     });
   }
 }
@@ -392,18 +474,17 @@ function postDock(role,text){
   div.innerHTML=`<span class='tag'>[${escapeHtml(role)}]</span>${escapeHtml(text)}`;
   dockEl.appendChild(div);
   dockEl.scrollTop=dockEl.scrollHeight;
-  return div; // return element so we can attach buttons when needed
+  return div;
 }
 function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
 
 // ---------- Commands ----------
 function handleCommand(raw){
-  // Supports "*command*" or "*command N*"
   const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
   const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
   const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
 
-  // quick status add/remove: *addstatus drunk* / *removestatus drunk*
+  // *addstatus drunk* / *removestatus drunk*
   const mStatus = raw.match(/^\*(addstatus|removestatus)\s+(.+)\*$/i);
   if (mStatus) {
     const action = mStatus[1].toLowerCase();
@@ -412,9 +493,11 @@ function handleCommand(raw){
       if (action === "addstatus") {
         if (!state.pc.statuses.includes(name)) state.pc.statuses.push(name);
         postDock("system", `Status added: ${name}`);
+        ensureCampaignDoc().then(()=> saveTurn("system", `Status added: ${name}`));
       } else {
         state.pc.statuses = state.pc.statuses.filter(s=>s.toLowerCase()!==name.toLowerCase());
         postDock("system", `Status removed: ${name}`);
+        ensureCampaignDoc().then(()=> saveTurn("system", `Status removed: ${name}`));
       }
       renderHealth();
     }
@@ -423,30 +506,33 @@ function handleCommand(raw){
 
   switch(cmd){
     case "addluck":
-      state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); return true;
+      state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
     case "removeluck":
-      state.pc.luck = Math.max(0, state.pc.luck - 1); renderHealth(); postDock("system",`Luck -1 → ${state.pc.luck}`); return true;
+      state.pc.luck = Math.max(0, state.pc.luck - 1); renderHealth(); postDock("system",`Luck -1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck -1`)); return true;
     case "addwound":
-      state.pc.wounds = clamp(state.pc.wounds + 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound +1 → ${state.pc.wounds}/${HEARTS_MAX}`); return true;
+      state.pc.wounds = clamp(state.pc.wounds + 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound +1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound +1`)); return true;
     case "removewound":
-      state.pc.wounds = clamp(state.pc.wounds - 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound -1 → ${state.pc.wounds}/${HEARTS_MAX}`); return true;
+      state.pc.wounds = clamp(state.pc.wounds - 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound -1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound -1`)); return true;
     case "addxp": {
       const n = Number.isFinite(argN) ? argN : 1;
       state.pc.xp = Math.max(0, state.pc.xp + n);
       renderHealth();
-      renderSkills();   // refresh skills so Level Up buttons enable/disable properly
-      postDock("system",`XP ${n>=0?"+":""}${n} → ${state.pc.xp}`);
+      renderSkills();
+      const msg = `XP ${n>=0?"+":""}${n} → ${state.pc.xp}`;
+      postDock("system", msg);
+      ensureCampaignDoc().then(()=> saveTurn("system", msg));
       return true;
     }
     case "newsession":
       state.pc.luck = RULES?.luck?.start ?? 1;
       postDock("system",`New session: Luck reset to ${state.pc.luck}.`);
+      ensureCampaignDoc().then(()=> saveTurn("system",`New session: Luck ${state.pc.luck}`));
       renderHealth();
       return true;
     case "togglerolling":
       state.testRolling = !state.testRolling;
       if(state.testRolling){
-        state.rollPending = { skill:"Test", difficulty:14, aid:0 }; // generic DC so you can roll right away
+        state.rollPending = { skill:"Test", difficulty:14, aid:0 };
         rollHint.style.display='inline-block';
         postDock('system','Test rolling: ON — tap any Skill name to roll vs DC 14. (No narration in test mode.)');
       } else {
@@ -457,26 +543,25 @@ function handleCommand(raw){
       return true;
     default:
       postDock("system",`Unknown command: ${cmd}`);
-      return true; // treat as handled to avoid sending to AI
+      ensureCampaignDoc().then(()=> saveTurn("system",`Unknown command: ${cmd}`));
+      return true;
   }
 }
 
-// ---------- Roll flow with Luck "reroll lowest" offer ----------
+// ---------- Roll flow with Luck reroll ----------
 function triggerRoll(skill){
   if(!state.rollPending){
     postDock("system","No roll requested right now.");
+    ensureCampaignDoc().then(()=> saveTurn("system","No roll requested."));
     return;
   }
 
-  // how many dice?
   const baseDice = diceForLevel(skill.tier);
   const diceCount = baseDice + (state.rollPending.aid || 0);
 
-  // roll the initial pool (no explosions yet)
   const initial = [];
   for (let i=0;i<diceCount;i++) initial.push(d6());
 
-  // all-6s explosion chain (PDF): only if initial pool is all 6s
   const initialAllSixes = initial.every(v => v === 6);
   const explosion = [];
   if (initialAllSixes && RULES?.all_sixes_explodes !== false) {
@@ -486,8 +571,6 @@ function triggerRoll(skill){
   }
 
   const dc = state.rollPending.difficulty;
-
-  // modifiers: wounds penalty + status/item vs skill traits
   const { mod, details } = computeModsForSkill(skill);
 
   const allDice = [...initial, ...explosion];
@@ -509,25 +592,27 @@ function triggerRoll(skill){
     modDetails: details
   };
 
-  // show the roll
   const modsLabel = details.length ? ` (mods ${mod>=0?'+':''}${mod}: ${details.join(', ')})` : '';
-  postDock("roll", `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${allDice.join(",")}] total ${total}${modsLabel} vs DC ${dc} → ${resultTier}`);
+  const rollMsg = `Rolled ${skill.name} (Lvl ${skill.tier}, ${diceCount}d6) → [${allDice.join(",")}] total ${total}${modsLabel} vs DC ${dc} → ${resultTier}`;
+  postDock("roll", rollMsg);
+  ensureCampaignDoc().then(()=> saveTurn("roll", rollMsg, rollObj));
 
   const usedDoAnything = (skill.name === "Do Anything");
 
-  // If no luck, resolve immediately and still award XP on fail; Do Anything success => new skill
   if(state.pc.luck <= 0){
     if(resultTier === "fail"){
       state.pc.xp += (RULES?.xp_on_fail ?? 1);
-      postDock("system", `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`);
+      const msg = `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`;
+      postDock("system", msg);
+      ensureCampaignDoc().then(()=> saveTurn("system", msg));
       renderHealth();
-      renderSkills(); // keep buttons in sync
+      renderSkills();
     } else if (resultTier === "success" && usedDoAnything){
       maybeCreateNewSkillFromDoAnything();
     }
-    // All-6s on initial pool → level up before narration
     if(initialAllSixes){
       postDock('system', `ALL 6s! ${skill.name} levels up!`);
+      ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
       levelUpSkill(skill);
       renderHealth();
       renderSkills();
@@ -536,14 +621,9 @@ function triggerRoll(skill){
     return;
   }
 
-  // Offer Luck reroll if possible (and only once) — reroll lowest among initial pool only
-  state.pendingReroll = {
-    skillRef: skill,
-    rollObj,
-    diceCount,
-    initial // keep the original initial dice for lowest selection
-  };
+  state.pendingReroll = { skillRef: skill, rollObj, diceCount, initial };
   const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
+  ensureCampaignDoc().then(()=> saveTurn("system","Offered Luck reroll."));
   const controls = document.createElement("div");
   controls.style.margin = "6px 0 0 28px";
   controls.innerHTML = `
@@ -555,9 +635,9 @@ function triggerRoll(skill){
   document.getElementById("btnRerollLowest").addEventListener("click", ()=> doLuckReroll());
   document.getElementById("btnResolve").addEventListener("click", ()=> finalizeRoll(false));
 
-  // All-6s on initial pool → level up before narration
   if(initialAllSixes){
     postDock('system', `ALL 6s! ${skill.name} levels up!`);
+    ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
     levelUpSkill(skill);
     renderHealth();
     renderSkills();
@@ -567,24 +647,20 @@ function triggerRoll(skill){
 function doLuckReroll(){
   const ctx = state.pendingReroll;
   if(!ctx) return;
-  if(state.pc.luck < 1){ postDock("system","No Luck available."); return; }
+  if(state.pc.luck < 1){ postDock("system","No Luck available."); ensureCampaignDoc().then(()=> saveTurn("system","No Luck available.")); return; }
 
   const { rollObj, diceCount, initial } = ctx;
 
-  // find the index of the lowest among the initial dice (first diceCount entries)
   const justInitial = initial.slice(0, diceCount);
   const minVal = Math.min(...justInitial);
   const idx = justInitial.indexOf(minVal);
 
-  // perform the reroll on that die
   const newVal = d6();
-  // We need to update both the composed raw list in rollObj and our copy of initial[]
   initial[idx] = newVal;
 
-  // rebuild rollObj.raw from updated initial + any explosion dice that were in the original
   const hasExplosion = (rollObj.explosionCount||0) > 0;
   const updatedRaw = hasExplosion
-    ? [...initial, ...rollObj.raw.slice(diceCount)]  // keep original explosion chain intact
+    ? [...initial, ...rollObj.raw.slice(diceCount)]
     : [...initial];
 
   rollObj.raw = updatedRaw;
@@ -596,45 +672,46 @@ function doLuckReroll(){
                         :                                                       "fail";
 
   state.pc.luck -= 1;
-  postDock("system", `Spent 1 Luck → rerolled lowest die ${minVal}→${newVal}. New total ${rollObj.total + (rollObj.mod||0)} → ${rollObj.tierResult}.`);
+  const msg = `Spent 1 Luck → rerolled lowest die ${minVal}→${newVal}. New total ${rollObj.total + (rollObj.mod||0)} → ${rollObj.tierResult}.`;
+  postDock("system", msg);
+  ensureCampaignDoc().then(()=> saveTurn("system", msg));
   renderHealth();
 
   finalizeRoll(true);
 }
 
 function finalizeRoll(wasReroll, providedRollObj){
-  // Clear hint & pending
   rollHint.style.display = 'none';
   state.rollPending = null;
 
   const ctx = state.pendingReroll;
   const payload = providedRollObj || (ctx ? ctx.rollObj : null);
 
-  // Apply XP on fail here for the reroll case (non-reroll/no-luck already handled in triggerRoll)
   if(ctx && ctx.rollObj && ctx.rollObj.tierResult === "fail"){
     state.pc.xp += (RULES?.xp_on_fail ?? 1);
-    postDock("system", `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`);
+    const msg = `+${RULES?.xp_on_fail ?? 1} XP for the failed roll → ${state.pc.xp}`;
+    postDock("system", msg);
+    ensureCampaignDoc().then(()=> saveTurn("system", msg));
     renderHealth();
     renderSkills();
   }
 
-  // If we had a pending reroll context and ended with success on Do Anything, offer new skill
   if (ctx && ctx.skillRef && ctx.skillRef.name === "Do Anything" && ctx.rollObj.tierResult === "success") {
     maybeCreateNewSkillFromDoAnything();
   }
 
-  // Test mode: stop here (no narration)
   if(state.testRolling){
     postDock("system","(Test mode) Roll complete — no narration.");
+    ensureCampaignDoc().then(()=> saveTurn("system","(Test mode) Roll complete."));
     state.pendingReroll = null;
     return;
   }
 
-  // Send to AI
   if(payload){
     aiTurnHandler({
       player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.",
-      mechanics: { roll_result: payload }
+      mechanics: { roll_result: payload },
+      campaign_card: buildCampaignCard()
     });
   }
   state.pendingReroll = null;
@@ -646,17 +723,18 @@ async function aiTurnHandler(payload){
     const text = USE_AI ? await callAiTurn({
       ...payload,
       state_summary: buildStateSummary(),
-      recent_turns: [] // (optional) wire up later if you log turns
+      recent_turns: []
     }) : null;
 
     if(!text){
       postDock('system', 'AI unavailable.');
+      ensureCampaignDoc().then(()=> saveTurn("system","AI unavailable."));
       return;
     }
     const [firstLine, ...rest] = text.split(/\r?\n/);
     let ooc = null;
     try { ooc = JSON.parse(firstLine).ooc; }
-    catch(e){ postDock('system','(AI format error)'); return; }
+    catch(e){ postDock('system','(AI format error)'); ensureCampaignDoc().then(()=> saveTurn("system","AI format error.")); return; }
 
     if(ooc.need_roll){
       state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty, aid:0 };
@@ -664,44 +742,54 @@ async function aiTurnHandler(payload){
       const dieTier = diceForLevel(
         (state.pc.skills.find(s=>s.name.toLowerCase()===String(ooc.skill||"").toLowerCase())?.tier) || 1
       );
-      postDock('dm', `Roll ${ooc.skill} ${dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:''));
+      const oocLine = `Roll ${ooc.skill} ${dieTier}d6 vs ${ooc.difficulty}` + (ooc.note?` — ${ooc.note}`:'');
+      postDock('dm', oocLine);
+      ensureCampaignDoc().then(()=> saveTurn("ooc", oocLine, { ooc }));
     } else {
-      postDock('dm', ooc.prompt || '…');
+      const oocLine = ooc.prompt || '…';
+      postDock('dm', oocLine);
+      ensureCampaignDoc().then(()=> saveTurn("ooc", oocLine, { ooc }));
     }
     const restJoined = rest.join('\n');
     const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
-    if(narrative) appendToBook(narrative);
+    if(narrative){
+      appendToBook(narrative);
+      ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
+    }
   }catch(err){
     console.error(err);
     postDock('system', 'AI request failed.');
+    ensureCampaignDoc().then(()=> saveTurn("system","AI request failed."));
   }
 }
 
-// ---------- URL + Firebase: hydrate campaign/pc by ?cid= ----------
+// ---------- URL + Firebase ----------
 function getQueryParam(name){
   const v = new URLSearchParams(location.search).get(name);
   return v ? decodeURIComponent(v) : null;
 }
 
-// Firebase (read-only on this page)
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import {
+  getFirestore, doc, getDoc,
+  collection, addDoc, getDocs, query, orderBy,
+  setDoc, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import {
   getAuth,
   onAuthStateChanged,
-  signInAnonymously   // quick dev login (swap for Google/email later)
+  signInAnonymously
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 
-// If your app is already initialized elsewhere on this page, this will be a no-op
 const fbApp = getApps().length ? getApps()[0] : initializeApp({
   apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
   authDomain: "r4rbai.firebaseapp.com",
   projectId: "r4rbai"
 });
 const db = getFirestore(fbApp);
-const auth = getAuth(fbApp); // <-- IMPORTANT: bind Auth to the same app
+const auth = getAuth(fbApp);
 
-
+// ---------- Hydration (replace-not-merge) ----------
 async function hydrateFromFirestoreByCid(){
   const cid = getQueryParam("cid");
   if(!cid){ postDock("system","No campaign id in URL."); return false; }
@@ -711,7 +799,6 @@ async function hydrateFromFirestoreByCid(){
     if(!snap.exists()){ postDock("system","Campaign not found."); return false; }
     const data = snap.data();
 
-    // Campaign meta
     state.campaign = {
       id: cid,
       title: data.title || data.name || "",
@@ -720,32 +807,45 @@ async function hydrateFromFirestoreByCid(){
       premise: data.premise || data.storyPremise || ""
     };
 
-    // Inventory (optional)
-    if(Array.isArray(data.inv)) state.inv = data.inv;
+    const pc = (data && typeof data.pc === "object") ? data.pc : {};
+    const invFromDoc = Array.isArray(data.inv) ? data.inv
+                     : (Array.isArray(pc.inv) ? pc.inv : []);
+    state.inv = invFromDoc.map(it => ({
+      name: String(it.name || ""),
+      qty: Number(it.qty || 1),
+      matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t).toLowerCase()) : []
+    }));
 
-    // PC
-    const pc = data.pc || {};
+    const skills = Array.isArray(pc.skills) ? pc.skills.map(s => (
+      typeof s === "string"
+        ? { name: String(s), tier: 1, traits: [] }
+        : { name: String(s.name || ""), tier: Math.max(1, Math.min(4, Number(s.tier || 1))), traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t)) : [] }
+    )) : [];
+
     state.pc = {
-      ...state.pc,
-      name: pc.name || "",
-      description: pc.description || "",
-      background: pc.background || "",
-      portraitDataUrl: pc.portraitDataUrl || "",
+      name: String(pc.name || ""),
+      description: String(pc.description || ""),
+      background: String(pc.background || ""),
+      portraitDataUrl: String(pc.portraitDataUrl || ""),
       xp: Number(pc.xp || 0),
       luck: Number(pc.luck || 0),
       wounds: Number(pc.wounds || 0),
-      statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
+      statuses: Array.isArray(pc.statuses) ? pc.statuses.map(s=>String(s)) : [],
       traits: pc.traits || null,
-      skills: Array.isArray(pc.skills) && pc.skills.length
-        ? pc.skills.map(s=>({ name:String(s.name||""), tier:Number(s.tier||1), traits: Array.isArray(s.traits)? s.traits.slice(0,2) : [] }))
-        : state.pc.skills
+      skills
     };
 
-    // Ensure Do Anything is present post-hydration
     ensureDoAnything();
 
-    // Re-render UI with real data
     renderSkills(); renderInv(); renderHealth();
+
+    console.group("Hydrate campaign");
+    console.log("DocID:", cid);
+    console.log("Raw data:", data);
+    console.log("PC (after parse):", state.pc);
+    console.log("Inventory (after parse):", state.inv);
+    console.groupEnd();
+
     return true;
   }catch(e){
     console.error(e);
@@ -759,62 +859,49 @@ const input = document.getElementById("userInput");
 document.getElementById("sendBtn").onclick = ()=>{
   const v = input.value.trim(); if(!v) return;
 
-  // Commands intercept (*cmd* or *cmd N*)
+  // Commands
   if(handleCommand(v)){ input.value=''; return; }
 
-  // Normal message
+  // User message
   postDock('you', v);
+  ensureCampaignDoc().then(()=> saveTurn("you", v));
   input.value='';
+
   if(state.rollPending){
     postDock('system','A roll is pending. Tap a Skill name in the tray to roll.');
+    ensureCampaignDoc().then(()=> saveTurn("system",'Roll is pending.'));
     return;
   }
 
   if(state.testRolling){
-    // No AI in test mode; just acknowledge.
     postDock('system','(Test mode) Message received.');
+    ensureCampaignDoc().then(()=> saveTurn("system","(Test mode) Message received."));
     return;
   }
 
-aiTurnHandler({
-  state_summary: buildStateSummary(),
-  campaign_card: buildCampaignCard(),
-  recent_turns: [],
-  mechanics: {
-    rules: {
-      dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
-      crit_margin: RULES?.crit_margin ?? 10,
-      difficulty_scale: RULES?.difficulty_scale || []
-    }
-  },
-  player_input: v + "\n\n(Use only the provided campaign_card and state_summary.)"
-});
+  aiTurnHandler({
+    state_summary: buildStateSummary(),
+    campaign_card: buildCampaignCard(),
+    recent_turns: [],
+    mechanics: {
+      rules: {
+        dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
+        crit_margin: RULES?.crit_margin ?? 10,
+        difficulty_scale: RULES?.difficulty_scale || []
+      }
+    },
+    player_input: v + "\n\n(Use only the provided campaign_card and state_summary.)"
+  });
 };
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
-function buildCampaignCard(){
-  const { campaign, pc } = state;
-  return {
-    title: campaign.title || "Untitled Campaign",
-    theme: campaign.theme || "",
-    setting: campaign.setting || "",
-    premise: campaign.premise || "",
-    pc: {
-      name: pc.name || "",
-      background: pc.background || "",
-      description: pc.description || "",
-      statuses: Array.isArray(pc.statuses) ? pc.statuses : [],
-      traits: pc.traits || null
-    }
-  };
-}
+// ---------- Starter Kit (strict; no fallbacks) ----------
 async function maybeGenerateStarterKit(){
   ensureDoAnything();
 
   const nonDA = (state.pc.skills || []).filter(s => s.name.toLowerCase() !== "do anything");
   const needSkills = nonDA.length < 3;
   const needItems  = (state.inv || []).length < 3;
-
   if (!needSkills && !needItems) return false;
 
   const card = buildCampaignCard();
@@ -845,12 +932,12 @@ async function maybeGenerateStarterKit(){
   } catch (e) {
     console.warn("Starter kit AI call failed:", e);
     postDock("system", "Starter kit AI call failed; nothing generated.");
+    ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit AI call failed; nothing generated."));
     return false;
   }
 
   console.log("[StarterKit raw]", text);
 
-  // Try to extract first JSON object
   const jsonStr = extractFirstJsonObject(text);
   let parsed;
   try {
@@ -858,14 +945,15 @@ async function maybeGenerateStarterKit(){
   } catch (e) {
     console.warn("Starter kit JSON parse failed:", text);
     postDock("system", "Starter kit parse failed; nothing generated.");
+    ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit parse failed; nothing generated."));
     return false;
   }
 
   const skillsIn = Array.isArray(parsed.skills) ? parsed.skills.slice(0,3) : [];
   const itemsIn  = Array.isArray(parsed.items)  ? parsed.items.slice(0,3)  : [];
-
   if (skillsIn.length !== 3 || itemsIn.length !== 3) {
     postDock("system", "Starter kit invalid; expected 3 skills and 3 items; nothing generated.");
+    ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit invalid; nothing generated."));
     return false;
   }
 
@@ -894,24 +982,20 @@ async function maybeGenerateStarterKit(){
   renderInv();
 
   postDock("system", "Starter kit created: 3 skills + 3 items.");
+  ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit created: 3 skills + 3 items."));
   return true;
 }
 
-
-// ---------- Kickoff ----------
+// ---------- Auth + Boot ----------
 async function ensureSignedIn() {
   return new Promise((resolve, reject) => {
     onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        resolve(user); // ✅ already logged in
-      } else {
+      if (user) { resolve(user); }
+      else {
         try {
-          // Quick fix: anonymous login
           const cred = await signInAnonymously(auth);
           resolve(cred.user);
-        } catch (e) {
-          reject(e);
-        }
+        } catch (e) { reject(e); }
       }
     });
   });
@@ -923,50 +1007,54 @@ window.addEventListener('load', async ()=>{
     setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200);
   }, 400);
 
-  // 0) Load rules FIRST so UI labels & AI cheat-sheet are correct
+  // 0) Load rules
   await loadRules();
 
-  // 1) Ensure we are signed in before touching Firestore
-  try {
-    await ensureSignedIn();
-  } catch (e) {
-    postDock("system","Login failed or cancelled.");
-    return;
-  }
+  // 1) Auth
+  try { await ensureSignedIn(); }
+  catch (e) { postDock("system","Login failed or cancelled."); return; }
 
-  // 2) Load campaign by ?cid=...
+  // 2) Hydrate by ?cid=...
   const ok = await hydrateFromFirestoreByCid();
 
-  // 2.5) Create starter kit if missing (3 L1 skills + 3 items, once)
+  // 2.5) One-time starter kit if missing
   await maybeGenerateStarterKit();
 
-  // 3) Session start: ensure Luck = start value if not set/persisted higher
+  // 2.7) Load saved turns (replay) and skip kickoff if history exists
+  await ensureCampaignDoc();
+  const turnCount = await loadTurnsAndRender();
+
+  // 3) Luck baseline
   const startLuck = RULES?.luck?.start ?? 1;
   if (typeof state.pc.luck !== 'number' || state.pc.luck < startLuck) {
     state.pc.luck = startLuck;
     renderHealth();
   }
 
-  // 4) If test mode, don't call AI
+  // 4) Test mode guard
   if(state.testRolling){
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
 
-  // 5) Start AI with hydrated data, pass a compact campaign card so the AI sticks to your world
-  aiTurnHandler({
-    kickoff: true,
-    state_summary: buildStateSummary(),
-    campaign_card: buildCampaignCard(),
-    recent_turns: [],
-    mechanics: {
-      rules: {
-        dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
-        crit_margin: RULES?.crit_margin ?? 10,
-        difficulty_scale: RULES?.difficulty_scale || []
-      }
-    },
-    player_input: ok ? 'Use the campaign_card below and begin the adventure in THIS setting.' 
-                     : 'Begin a quick start one-shot using the campaign_card below.',
-  });
+  // 5) AI kickoff ONLY if no prior turns (fresh campaign)
+  if (turnCount === 0) {
+    aiTurnHandler({
+      kickoff: true,
+      state_summary: buildStateSummary(),
+      campaign_card: buildCampaignCard(),
+      recent_turns: [],
+      mechanics: {
+        rules: {
+          dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
+          crit_margin: RULES?.crit_margin ?? 10,
+          difficulty_scale: RULES?.difficulty_scale || []
+        }
+      },
+      player_input: ok ? 'Use the campaign_card below and begin the adventure in THIS setting.'
+                       : 'Begin a quick start one-shot using the campaign_card below.'
+    });
+  } else {
+    postDock("system", `Loaded ${turnCount} prior turns from campaign history.`);
+  }
 });
