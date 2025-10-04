@@ -115,42 +115,57 @@ async function saveTurn(role, text, extras = {}) {
     role,
     text,
     ...extras,
-    createdAt: serverTimestamp()
+    createdAtMs: Date.now(),     // ← new: stable client clock
+    createdAt: serverTimestamp() // ← existing: server time
   });
 }
 
+
+// returns count of turns loaded
 // returns count of turns loaded
 async function loadTurnsAndRender() {
   if (!state.campaign?.id && !state.campaignId) return 0;
   const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
-  const q = query(ref, orderBy("createdAt", "asc"));
-  const snap = await getDocs(q);
 
-  // Clear the UI first (book + dock), then replay
+  // Fetch all (we'll sort locally for a rock-solid order)
+  const snap = await getDocs(ref);
+
+  // Build array and sort by our stable keys
+  const turns = [];
+  snap.forEach(docSnap => {
+    const t = docSnap.data() || {};
+    const ms = typeof t.createdAtMs === "number" ? t.createdAtMs
+             : (t.createdAt?.toMillis?.() || 0);
+    turns.push({ ms, role: t.role || "system", text: t.text || "", raw: t });
+  });
+  turns.sort((a,b) => a.ms - b.ms);
+
+  // Clear UI, then replay WITHOUT animation
   bookEl.innerHTML = "";
   dockEl.innerHTML = "";
 
   let count = 0;
-  snap.forEach(docSnap => {
-    const t = docSnap.data(); count++;
+  for (const t of turns) {
+    count++;
     switch (t.role) {
       case "you":
-        postDock("you", t.text || "");
+        postDock("you", t.text);
         break;
       case "ooc":
-        postDock("dm", t.text || "");
+        postDock("dm", t.text);
         break;
       case "dm":
-        if (t.text) appendToBook(t.text);
+        appendToBookImmediate(t.text);   // ← no typing on history
         break;
       case "system":
       case "roll":
       default:
-        if (t.text) postDock(t.role || "system", t.text);
+        postDock(t.role, t.text);
     }
-  });
+  }
   return count;
 }
+
 
 // ---------- Rules loading/compilation ----------
 let RULES = null;
@@ -462,6 +477,15 @@ function appendToBook(text){
   }
   typeNextPara();
 }
+function appendToBookImmediate(text){
+  const paragraphs = String(text || "").trim().split(/\n{2,}/);
+  for (const para of paragraphs) {
+    const p = document.createElement("p");
+    p.textContent = para;
+    bookEl.appendChild(p);
+  }
+}
+
 function typewriter(str,node,speed=12,done){
   let i=0;(function tick(){ node.textContent+=str[i++]||""; if(!scrollLock.checked) node.parentElement.scrollTop=node.parentElement.scrollHeight;
     if(i<str.length){ setTimeout(tick,Math.max(6,speed)); } else done&&done(); })();
