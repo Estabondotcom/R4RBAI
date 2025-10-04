@@ -99,11 +99,8 @@ charModal?.addEventListener("click", (e) => {
 });
 
 // ----- Image handling -----
-const DEFAULT_IMG = "data:image/svg+xml;utf8," + encodeURIComponent(`
-  <svg xmlns='http://www.w3.org/2000/svg' width='360' height='360'>
-    <rect width='100%' height='100%' fill='#0c0c0c'/>
-    <text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='#444' font-size='20'>No image</text>
-  </svg>`);
+const DEFAULT_IMG = "profiledef.png";
+
 function setPreview(src){ pcImagePreview.src = src || DEFAULT_IMG; }
 setPreview(DEFAULT_IMG);
 
@@ -113,10 +110,11 @@ pcImageFile?.addEventListener("change", (e)=>{
   reader.onload = () => { imageDataUrl = reader.result; setPreview(imageDataUrl); };
   reader.readAsDataURL(f);
 });
+
 pcImageClear?.addEventListener("click", ()=>{
   imageDataUrl = "";
   pcImageFile.value = "";
-  setPreview(DEFAULT_IMG);
+  setPreview(DEFAULT_IMG); // shows profiledef.png again
 });
 
 // ----- Trait pips -----
@@ -175,19 +173,21 @@ charForm?.addEventListener("submit", (e)=>{
   const name = pcName.value.trim();
   if (!name) { pcName.focus(); return; }
 
-  pcDraft = {
-    name,
-    description: pcDescription.value.trim(),
-    background: pcBackground.value.trim(),
-    portraitDataUrl: imageDataUrl || null,
-    traits: {
-      Constitution: traitValues.Constitution,
-      Strength:     traitValues.Strength,
-      Dexterity:    traitValues.Dexterity,
-      Intelligence: traitValues.Intelligence,
-      Magic:        traitValues.Magic
-    }
-  };
+pcDraft = {
+  name,
+  description: pcDescription.value.trim(),
+  background: pcBackground.value.trim(),
+- portraitDataUrl: imageDataUrl || null,
++ portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
+  traits: {
+    Constitution: traitValues.Constitution,
+    Strength:     traitValues.Strength,
+    Dexterity:    traitValues.Dexterity,
+    Intelligence: traitValues.Intelligence,
+    Magic:        traitValues.Magic
+  }
+};
+
 
   // Reflect draft under the inline button (optional but helpful)
   if (charSummary) {
