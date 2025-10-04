@@ -177,8 +177,8 @@ pcDraft = {
   name,
   description: pcDescription.value.trim(),
   background: pcBackground.value.trim(),
-- portraitDataUrl: imageDataUrl || null,
-+ portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
+  portraitDataUrl: imageDataUrl || null,
+  portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
   traits: {
     Constitution: traitValues.Constitution,
     Strength:     traitValues.Strength,
