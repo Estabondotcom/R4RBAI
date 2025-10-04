@@ -414,7 +414,23 @@ function renderSkills(){
 }
 
 function renderInv(){
-  document.getElementById("invList").innerHTML = state.inv.map(i=>`• ${escapeHtml(i.name)} ×${i.qty}`).join("<br/>");
+  const el = document.getElementById("invList");
+  if (!state.inv || state.inv.length === 0) {
+    el.innerHTML = "—";
+    return;
+  }
+
+  el.innerHTML = state.inv.map(it => {
+    const tags = Array.isArray(it.matches) && it.matches.length
+      ? it.matches.map(t => `<span class="pill soft">${escapeHtml(t)}</span>`).join("")
+      : "";
+    return `
+      <div class="invRow" style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+        <span class="name">• ${escapeHtml(it.name)} ×${it.qty}</span>
+        <span class="tags" style="display:flex;gap:6px;flex-wrap:wrap;">${tags}</span>
+      </div>
+    `;
+  }).join("");
 }
 
 // ---------- Health panel ----------
