@@ -192,7 +192,7 @@ pcDraft = {
   // Reflect draft under the inline button (optional but helpful)
   if (charSummary) {
     const t = pcDraft.traits;
-    charSummary.textContent = `${pcDraft.name} — CON:${t.Constitution} STR:${t.Strength} DEX:${t.Dexterity} INT:${t.Intelligence} MAG:${t.Magic}`;
+    charSummary.textContent = `${pcDraft.name} — Cha:${t.Charisma} STR:${t.Strength} DEX:${t.Dexterity} INT:${t.Intelligence} MAG:${t.Magic}`;
   }
 
   closeModal();
