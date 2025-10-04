@@ -131,7 +131,33 @@ async function ensureCampaignDoc() {
     }, { merge: true });
   }
 }
+// Save the current PC (including skills) and inventory into the campaign doc
+async function savePcSnapshot(extra = {}) {
+  const ref = campaignDocRef();
+  const pc = {
+    name: String(state.pc.name || ""),
+    description: String(state.pc.description || ""),
+    background: String(state.pc.background || ""),
+    portraitDataUrl: String(state.pc.portraitDataUrl || ""),
+    xp: Number(state.pc.xp || 0),
+    luck: Number(state.pc.luck || 0),
+    wounds: Number(state.pc.wounds || 0),
+    statuses: Array.isArray(state.pc.statuses) ? state.pc.statuses.map(String) : [],
+    traits: state.pc.traits || null,
+    skills: (state.pc.skills || []).map(s => ({
+      name: String(s.name || ""),
+      tier: Math.max(1, Math.min(4, Number(s.tier || 1))),
+      traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t)) : []
+    }))
+  };
+  const inv = (state.inv || []).map(it => ({
+    name: String(it.name || ""),
+    qty: Math.max(1, Number(it.qty || 1)),
+    matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t)) : []
+  }));
 
+  await setDoc(ref, { pc, inv, updatedAt: serverTimestamp(), ...extra }, { merge: true });
+}
 async function saveTurn(role, text, extras = {}) {
   if (!state.campaign?.id && !state.campaignId) return;
   const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
@@ -1102,7 +1128,8 @@ async function maybeGenerateStarterKit(){
 
   renderSkills();
   renderInv();
-
+await savePcSnapshot();
+  
   postDock("system", "Starter kit created: 3 skills + 3 items.");
   ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit created: 3 skills + 3 items."));
   return true;
