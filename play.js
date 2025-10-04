@@ -18,7 +18,9 @@ const state = {
   inv: [],              // empty; Firestore/starter kit will populate
   rollPending: null,
   testRolling: false,
-  pendingReroll: null
+  pendingReroll: null,
+  storySummary: "",        // rolling recap the AI can read
+  isReplayingHistory: false
 };
 
 // ---------- DOM refs ----------
@@ -88,7 +90,28 @@ function buildCampaignCard(){
   };
 }
 
-// ---------- Firestore helpers (save/load turns) ----------
+// ---------- Firestore / Firebase ----------
+import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import {
+  getFirestore, doc, getDoc,
+  collection, addDoc, getDocs, query, orderBy, limit,
+  setDoc, serverTimestamp, updateDoc
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import {
+  getAuth,
+  onAuthStateChanged,
+  signInAnonymously
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+
+const fbApp = getApps().length ? getApps()[0] : initializeApp({
+  apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
+  authDomain: "r4rbai.firebaseapp.com",
+  projectId: "r4rbai"
+});
+const db = getFirestore(fbApp);
+const auth = getAuth(fbApp);
+
+// ---------- Firestore helpers (campaign + turns) ----------
 function campaignDocRef() {
   const id = state.campaign?.id || state.campaignId;
   return doc(db, "campaigns", id);
@@ -103,6 +126,7 @@ async function ensureCampaignDoc() {
       theme: state.campaign?.theme || "",
       setting: state.campaign?.setting || "",
       premise: state.campaign?.premise || "",
+      storySummary: state.storySummary || "",
       createdAt: serverTimestamp()
     }, { merge: true });
   }
@@ -115,19 +139,19 @@ async function saveTurn(role, text, extras = {}) {
     role,
     text,
     ...extras,
-    createdAtMs: Date.now(),     // ← new: stable client clock
-    createdAt: serverTimestamp() // ← existing: server time
+    createdAtMs: Date.now(),
+    createdAt: serverTimestamp()
   });
+  // consider refreshing the rolling summary
+  maybeUpdateStorySummary();
 }
 
-
-// returns count of turns loaded
-// returns count of turns loaded
+// returns count of turns loaded (replay history without animation, in strict order)
 async function loadTurnsAndRender() {
   if (!state.campaign?.id && !state.campaignId) return 0;
-  const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
+  state.isReplayingHistory = true;
 
-  // Fetch all (we'll sort locally for a rock-solid order)
+  const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
   const snap = await getDocs(ref);
 
   // Build array and sort by our stable keys
@@ -155,7 +179,7 @@ async function loadTurnsAndRender() {
         postDock("dm", t.text);
         break;
       case "dm":
-        appendToBookImmediate(t.text);   // ← no typing on history
+        appendToBookImmediate(t.text);   // no typing on history
         break;
       case "system":
       case "roll":
@@ -163,9 +187,80 @@ async function loadTurnsAndRender() {
         postDock(t.role, t.text);
     }
   }
+
+  state.isReplayingHistory = false;
   return count;
 }
 
+// Get the last N turns and return as [{role, text}] oldest→newest
+async function getRecentTurnsForAI(n = 8) {
+  const id = state.campaign?.id || state.campaignId;
+  if (!id) return [];
+  const ref = collection(db, "campaigns", id, "turns");
+
+  // newest-first by client millis, then reverse
+  const q = query(ref, orderBy("createdAtMs", "desc"), limit(n));
+  const snap = await getDocs(q);
+
+  const buf = [];
+  snap.forEach(s => {
+    const t = s.data() || {};
+    if (t.role === "you" || t.role === "ooc" || t.role === "dm") {
+      buf.push({ role: t.role, text: String(t.text || "") });
+    }
+  });
+  return buf.reverse();
+}
+
+// rolling story summary (recap every ~10 saved turns)
+const SUMMARY_EVERY_N_TURNS = 10;
+let _turnsSinceSummary = 0;
+
+async function maybeUpdateStorySummary() {
+  if (state.isReplayingHistory) return; // never summarize during history load
+  _turnsSinceSummary++;
+  if (_turnsSinceSummary < SUMMARY_EVERY_N_TURNS) return;
+
+  const recent = await getRecentTurnsForAI(30);
+  const prompt = [
+    "You are the campaign scribe. Produce an objective recap of the story so far.",
+    "Keep 120–200 words. No spoilers for hidden info. Include named NPCs, locations, goals, and open threads.",
+    "",
+    "Existing summary (may be empty):",
+    state.storySummary || "(none)",
+    "",
+    "Recent log (role: text):",
+    ...recent.map(t => `- ${t.role}: ${t.text}`)
+  ].join("\n");
+
+  let text = "";
+  try {
+    text = await callAiTurn({
+      kickoff: false,
+      state_summary: buildStateSummary(),
+      campaign_card: buildCampaignCard(),
+      player_input: prompt
+    });
+  } catch (e) {
+    console.warn("Summary AI failed:", e);
+    _turnsSinceSummary = 0;
+    return;
+  }
+
+  const newSummary = String(text || "").trim();
+  if (!newSummary) { _turnsSinceSummary = 0; return; }
+
+  state.storySummary = newSummary;
+  try {
+    await updateDoc(campaignDocRef(), { storySummary: newSummary });
+  } catch (e) {
+    console.warn("Failed to save storySummary:", e);
+  }
+
+  _turnsSinceSummary = 0;
+  postDock("system", "Story summary updated.");
+  ensureCampaignDoc().then(()=> saveTurn("system", "Story summary updated."));
+}
 
 // ---------- Rules loading/compilation ----------
 let RULES = null;
@@ -419,7 +514,6 @@ function renderInv(){
     el.innerHTML = "—";
     return;
   }
-
   el.innerHTML = state.inv.map(it => {
     const tags = Array.isArray(it.matches) && it.matches.length
       ? it.matches.map(t => `<span class="pill soft">${escapeHtml(t)}</span>`).join("")
@@ -501,7 +595,6 @@ function appendToBookImmediate(text){
     bookEl.appendChild(p);
   }
 }
-
 function typewriter(str,node,speed=12,done){
   let i=0;(function tick(){ node.textContent+=str[i++]||""; if(!scrollLock.checked) node.parentElement.scrollTop=node.parentElement.scrollHeight;
     if(i<str.length){ setTimeout(tick,Math.max(6,speed)); } else done&&done(); })();
@@ -580,6 +673,10 @@ function handleCommand(raw){
         rollHint.style.display='none';
         postDock('system','Test rolling: OFF');
       }
+      return true;
+    case "summary":
+      postDock("system", state.storySummary || "(no summary yet)");
+      ensureCampaignDoc().then(()=> saveTurn("system","(requested summary)"));
       return true;
     default:
       postDock("system",`Unknown command: ${cmd}`);
@@ -720,7 +817,7 @@ function doLuckReroll(){
   finalizeRoll(true);
 }
 
-function finalizeRoll(wasReroll, providedRollObj){
+async function finalizeRoll(wasReroll, providedRollObj){
   rollHint.style.display = 'none';
   state.rollPending = null;
 
@@ -748,10 +845,12 @@ function finalizeRoll(wasReroll, providedRollObj){
   }
 
   if(payload){
+    const recent = await getRecentTurnsForAI(8);
     aiTurnHandler({
       player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.",
       mechanics: { roll_result: payload },
-      campaign_card: buildCampaignCard()
+      recent_turns: recent,
+      story_summary: state.storySummary || ""
     });
   }
   state.pendingReroll = null;
@@ -763,7 +862,9 @@ async function aiTurnHandler(payload){
     const text = USE_AI ? await callAiTurn({
       ...payload,
       state_summary: buildStateSummary(),
-      recent_turns: []
+      campaign_card: buildCampaignCard(),
+      recent_turns: payload.recent_turns ?? [],
+      story_summary: payload.story_summary ?? ""
     }) : null;
 
     if(!text){
@@ -803,33 +904,13 @@ async function aiTurnHandler(payload){
   }
 }
 
-// ---------- URL + Firebase ----------
+// ---------- URL + hydration ----------
 function getQueryParam(name){
   const v = new URLSearchParams(location.search).get(name);
   return v ? decodeURIComponent(v) : null;
 }
 
-import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import {
-  getFirestore, doc, getDoc,
-  collection, addDoc, getDocs, query, orderBy,
-  setDoc, serverTimestamp
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import {
-  getAuth,
-  onAuthStateChanged,
-  signInAnonymously
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-
-const fbApp = getApps().length ? getApps()[0] : initializeApp({
-  apiKey: "AIzaSyCV8U5deVGvGBHn00DtnX6xkkNZJ2895Qo",
-  authDomain: "r4rbai.firebaseapp.com",
-  projectId: "r4rbai"
-});
-const db = getFirestore(fbApp);
-const auth = getAuth(fbApp);
-
-// ---------- Hydration (replace-not-merge) ----------
+// replace-not-merge hydration
 async function hydrateFromFirestoreByCid(){
   const cid = getQueryParam("cid");
   if(!cid){ postDock("system","No campaign id in URL."); return false; }
@@ -846,6 +927,7 @@ async function hydrateFromFirestoreByCid(){
       setting: data.setting || "",
       premise: data.premise || data.storyPremise || ""
     };
+    state.storySummary = String(data.storySummary || "");
 
     const pc = (data && typeof data.pc === "object") ? data.pc : {};
     const invFromDoc = Array.isArray(data.inv) ? data.inv
@@ -896,7 +978,7 @@ async function hydrateFromFirestoreByCid(){
 
 // ---------- Chat input ----------
 const input = document.getElementById("userInput");
-document.getElementById("sendBtn").onclick = ()=>{
+document.getElementById("sendBtn").onclick = async ()=>{
   const v = input.value.trim(); if(!v) return;
 
   // Commands
@@ -919,10 +1001,10 @@ document.getElementById("sendBtn").onclick = ()=>{
     return;
   }
 
+  const recent = await getRecentTurnsForAI(8);
   aiTurnHandler({
-    state_summary: buildStateSummary(),
-    campaign_card: buildCampaignCard(),
-    recent_turns: [],
+    recent_turns: recent,
+    story_summary: state.storySummary || "",
     mechanics: {
       rules: {
         dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
@@ -1081,9 +1163,8 @@ window.addEventListener('load', async ()=>{
   if (turnCount === 0) {
     aiTurnHandler({
       kickoff: true,
-      state_summary: buildStateSummary(),
-      campaign_card: buildCampaignCard(),
-      recent_turns: [],
+      recent_turns: await getRecentTurnsForAI(8),
+      story_summary: state.storySummary || "",
       mechanics: {
         rules: {
           dice_by_level: RULES?.dice_by_level || {1:2,2:3,3:4,4:5},
@@ -1098,3 +1179,4 @@ window.addEventListener('load', async ()=>{
     postDock("system", `Loaded ${turnCount} prior turns from campaign history.`);
   }
 });
+
