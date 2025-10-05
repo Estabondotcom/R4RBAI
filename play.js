@@ -910,16 +910,20 @@ async function triggerRoll(skill){
   const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
   ensureCampaignDoc().then(()=> saveTurn("system","Offered Luck reroll."));
   const controls = document.createElement("div");
-  controls.style.margin = "6px 0 0 28px";
-  controls.innerHTML = `
-    <button type="button" id="btnRerollLowest" class="btn-soft tiny">Reroll Lowest (1 Luck)</button>
-    <button type="button" id="btnResolve" class="btn-soft tiny">Resolve</button>
-  `;
-  msg.appendChild(controls);
+controls.className = "roll-controls";
+controls.innerHTML = `
+  <div class="row gap-8">
+    <button type="button" class="btn-soft tiny btn-reroll-lowest" data-action="reroll-lowest">
+      Reroll Lowest (1 Luck)
+    </button>
+    <button type="button" class="btn-soft tiny btn-resolve" data-action="resolve">
+      Resolve
+    </button>
+  </div>
+`;
+msg.appendChild(controls);
 
-  document.getElementById("btnRerollLowest").addEventListener("click", ()=> doLuckReroll());
-  document.getElementById("btnResolve").addEventListener("click", ()=> finalizeRoll(false));
-
+  
   if(initialAllSixes){
     postDock('system', `ALL 6s! ${skill.name} levels up!`);
     ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
