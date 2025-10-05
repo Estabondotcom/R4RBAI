@@ -1,14 +1,20 @@
 // functions/index.js
+// deleteCampaign is now callable (onCall) → no CORS needed.
+// aiTurn remains HTTP (onRequest) with CORS for your GitHub Pages site.
+
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import admin from "firebase-admin";
 import corsLib from "cors";
 import OpenAI from "openai";
 
-admin.initializeApp();
+// ─────────────────────────── Firebase Admin init ───────────────────────────
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
-/* --- your existing callable (kept) --- */
+// ───────────────────────────── deleteCampaign ──────────────────────────────
 export const deleteCampaign = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
@@ -20,7 +26,10 @@ export const deleteCampaign = onCall(async (request) => {
 
   const ref = admin.firestore().collection("campaigns").doc(campaignId);
   const snap = await ref.get();
-  if (!snap.exists) return { ok: true, message: "Not found (already deleted)" };
+  if (!snap.exists) {
+    // Idempotent delete: treat missing doc as success
+    return { ok: true, message: "Not found (already deleted)" };
+  }
 
   const data = snap.data();
   if (data.uid !== uid) {
@@ -31,8 +40,8 @@ export const deleteCampaign = onCall(async (request) => {
   return { ok: true };
 });
 
-/* --- AI GM HTTPS endpoint --- */
-const ALLOWED_ORIGIN = "https://estabondotcom.github.io"; // your site origin
+// ──────────────────────────────── aiTurn ───────────────────────────────────
+const ALLOWED_ORIGIN = "https://estabondotcom.github.io";
 const cors = corsLib({ origin: ALLOWED_ORIGIN });
 
 export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
@@ -46,12 +55,9 @@ export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
     if (req.method !== "POST") return res.status(405).send("POST only");
 
     try {
-      // ✅ Instantiate OpenAI **inside** the handler, after secrets are available
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
       const body = req.body || {};
-      const system = `
-You are the AI GM for "Roll for Rocket Boots".
+      const system = `You are the AI GM for "Roll for Rocket Boots".
 Reply in two parts:
 1) First line: {"ooc":{"need_roll":true|false,"skill":"<Skill>","dieTier":1..4,"difficulty":8..24,"note":"optional","prompt":"optional"}}
 2) Then a blank line and "NARRATIVE:" with 2–4 short, evocative paragraphs.
@@ -59,8 +65,7 @@ Reply in two parts:
 Rules:
 - Do NOT roll dice; the client handles mechanics.
 - If mechanics.roll_result is provided, set need_roll=false and narrate consequences.
-- Keep continuity with state_summary and recent_turns.
-      `.trim();
+- Keep continuity with state_summary and recent_turns.`.trim();
 
       const resp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -68,8 +73,8 @@ Rules:
         max_tokens: 600,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: JSON.stringify(body) }
-        ]
+          { role: "user", content: JSON.stringify(body) },
+        ],
       });
 
       const text =
