@@ -145,16 +145,16 @@ async function savePcSnapshot(extra = {}) {
     statuses: Array.isArray(state.pc.statuses) ? state.pc.statuses.map(String) : [],
     traits: state.pc.traits || null,
     skills: (state.pc.skills || []).map(s => ({
-      name: String(s.name || ""),
-      tier: Math.max(1, Math.min(4, Number(s.tier || 1))),
-      traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t)) : []
-    }))
+    name: String(s.name || ""),
+    tier: Math.max(1, Math.min(4, Number(s.tier || 1))),
+    traits: sanitizeTraitList(s.traits, 2)
+ }))
   };
-  const inv = (state.inv || []).map(it => ({
-    name: String(it.name || ""),
-    qty: Math.max(1, Number(it.qty || 1)),
-    matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t)) : []
-  }));
+   const inv = (state.inv || []).map(it => ({
+   name: String(it.name || ""),
+   qty: Math.max(1, Number(it.qty || 1)),
+   matches: sanitizeTraitList(it.matches, 2)
+}));
 
   await setDoc(ref, { pc, inv, updatedAt: serverTimestamp(), ...extra }, { merge: true });
 }
