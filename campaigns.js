@@ -1,4 +1,3 @@
-
 // ----- Firebase (CDN v11) -----
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
@@ -78,7 +77,7 @@ function openModal() {
     resetCharForm();
   }
 
-  // NEW: lock background scroll
+  // lock background scroll
   document.body.classList.add("modal-open");
 
   charModal.classList.remove("hidden");
@@ -90,7 +89,7 @@ function closeModal() {
   charModal.classList.add("hidden");
   charModal.setAttribute("aria-hidden", "true");
 
-  // NEW: restore background scroll
+  // restore background scroll
   document.body.classList.remove("modal-open");
 }
 
@@ -174,20 +173,19 @@ charForm?.addEventListener("submit", (e)=>{
   const name = pcName.value.trim();
   if (!name) { pcName.focus(); return; }
 
-pcDraft = {
-  name,
-  description: pcDescription.value.trim(),
-  background: pcBackground.value.trim(),
-  portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
-  traits: {
-    Charisma: traitValues.Charisma,
-    Strength:     traitValues.Strength,
-    Dexterity:    traitValues.Dexterity,
-    Intelligence: traitValues.Intelligence,
-    Magic:        traitValues.Magic
-  }
-};
-
+  pcDraft = {
+    name,
+    description: pcDescription.value.trim(),
+    background: pcBackground.value.trim(),
+    portraitDataUrl: imageDataUrl || DEFAULT_IMG, // UI-only; not saved to Firestore
+    traits: {
+      Charisma:     traitValues.Charisma,
+      Strength:     traitValues.Strength,
+      Dexterity:    traitValues.Dexterity,
+      Intelligence: traitValues.Intelligence,
+      Magic:        traitValues.Magic
+    }
+  };
 
   // Reflect draft under the inline button (optional but helpful)
   if (charSummary) {
@@ -214,17 +212,26 @@ createCampaignBtn?.addEventListener("click", async ()=>{
   // 1) Upload portrait to Cloud Storage if we have a user-provided dataURL
   let portraitUrl = null;
   if (pcDraft.portraitDataUrl && pcDraft.portraitDataUrl.startsWith("data:")) {
-    const cid = crypto.randomUUID();
-    const path = `users/${user.uid}/campaign_portraits/${cid}.jpg`;
-    const portraitRef = ref(storage, path);
-	const toUpload = await downscaleDataUrl(pcDraft.portraitDataUrl, 384, 0.8);
-    await uploadString(portraitRef, toUpload, "data_url");
-    portraitUrl = await getDownloadURL(portraitRef);
+    try {
+      const cid = crypto.randomUUID();
+      const path = `users/${user.uid}/campaign_portraits/${cid}.jpg`;
+      const portraitRef = ref(storage, path);
+
+      // Downscale/compress client-side for faster uploads
+      const toUpload = await downscaleDataUrl(pcDraft.portraitDataUrl, 384, 0.8);
+      await uploadString(portraitRef, toUpload, "data_url");
+      portraitUrl = await getDownloadURL(portraitRef);
+    } catch (err) {
+      console.error("Portrait upload failed:", err);
+      alert("Portrait upload failed. Using default image.");
+      portraitUrl = DEFAULT_IMG;
+    }
   } else {
     // fallback to your bundled default
-    portraitUrl = "profiledef.png";
+    portraitUrl = DEFAULT_IMG;
   }
 
+  // 2) Build payload (store only the small URL in Firestore)
   const payload = {
     uid: user.uid,
     name,
@@ -233,16 +240,16 @@ createCampaignBtn?.addEventListener("click", async ()=>{
     premise,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-
-  pc: {
-    name: pcDraft.name,
-    description: pcDraft.description,
-    background: pcDraft.background,
-    traits: pcDraft.traits,
-    portraitUrl // <-- small URL string instead of huge base64
-  }
+    pc: {
+      name: pcDraft.name,
+      description: pcDraft.description,
+      background: pcDraft.background,
+      traits: pcDraft.traits,
+      portraitUrl // <-- small URL string instead of huge base64
+    }
   };
 
+  // 3) Write document
   try {
     await addDoc(collection(db, "campaigns"), payload);
     alert("Campaign created!");
@@ -251,6 +258,8 @@ createCampaignBtn?.addEventListener("click", async ()=>{
     alert("Create failed: " + (err.message || err));
   }
 });
+
+// Downscale helper
 async function downscaleDataUrl(dataUrl, maxW = 384, quality = 0.8) {
   const img = new Image();
   img.src = dataUrl;
@@ -264,6 +273,7 @@ async function downscaleDataUrl(dataUrl, maxW = 384, quality = 0.8) {
   ctx.drawImage(img, 0, 0, w, h);
   return canvas.toDataURL("image/jpeg", quality);
 }
+
 // =====================================================
 //              Campaign list + delete (CF)
 // =====================================================
@@ -342,7 +352,7 @@ onAuthStateChanged(auth, (user)=>{
   if (!user) {
     listEl.innerHTML = `<div class="empty">Please sign in to view your campaigns.</div>`;
     return;
-    }
+  }
   mountCampaigns(user.uid);
 });
 
