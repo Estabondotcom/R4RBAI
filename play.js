@@ -1166,7 +1166,7 @@ document.getElementById("sendBtn").onclick = async ()=>{
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
 // ---------- Starter Kit (strict; no fallbacks) ----------
-}async function maybeGenerateStarterKit(){
+async function maybeGenerateStarterKit(){
   ensureDoAnything();
 
   const nonDA = (state.pc.skills || []).filter(s => s.name.toLowerCase() !== "do anything");
