@@ -198,3 +198,36 @@ input, textarea, select, button{ font-size:16px }
 /* Secondary buttons in modal */
 button.secondary{ background:transparent; border:1px solid #444; color:#ddd }
 .icon-btn{ background:none; border:none; color:inherit; font-size:1.2rem; cursor:pointer }
+.trait-picker-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 9999;
+}
+.trait-picker {
+  background: #1a1a1a;
+  border: 1px solid #444;
+  padding: 20px;
+  border-radius: 10px;
+  color: #eee;
+  width: 300px;
+}
+.trait-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 10px 0;
+}
+.trait-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trait-actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+}

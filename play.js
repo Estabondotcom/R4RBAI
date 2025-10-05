@@ -397,6 +397,78 @@ function computeModsForSkill(skill){
 }
 
 function d6(){ return Math.floor(Math.random()*6)+1; }
+// ---------- Trait pool (authoritative) ----------
+const TRAIT_POOL = [
+  "Acrobatics","Agility","Aim","Athletics","Charm","Climb","Combat","Constitution","Crafting",
+  "Deception","Endurance","Exploration","Explosive","Flashy","Focus","Improv","Insight","Intimidate",
+  "Logic","Loud","Magic","Memory","Occult","Perception","Performance","Persuasion","Reflex","Religion",
+  "Social","Stealth","Survival","Swim","Tactics","Tech","Violent"
+];
+
+// Lowercased set for quick membership checks, but we keep UI labels capitalized.
+const TRAIT_SET_LOWER = new Set(TRAIT_POOL.map(t => t.toLowerCase()));
+
+function isAllowedTrait(t){
+  return TRAIT_SET_LOWER.has(String(t).toLowerCase());
+}
+
+// Normalize -> lowercase, filter to allowed, unique, and cap to N (default 2)
+function sanitizeTraitList(arr, max=2){
+  const out = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(arr) ? arr : [])) {
+    const t = String(raw).toLowerCase();
+    if (TRAIT_SET_LOWER.has(t) && !seen.has(t)) {
+      out.push(t);
+      seen.add(t);
+      if (out.length >= max) break;
+    }
+  }
+  return out;
+}
+// ---------- Trait Picker Modal Helper ----------
+async function openTraitPicker({ title = "Choose Traits", max = 2 } = {}) {
+  return new Promise((resolve) => {
+    // Create overlay
+    const overlay = document.createElement("div");
+    overlay.className = "trait-picker-overlay";
+    overlay.innerHTML = `
+      <div class="trait-picker">
+        <h3>${title}</h3>
+        <div class="trait-grid">
+          ${TRAIT_POOL.map(t => `
+            <label class="trait-option">
+              <input type="checkbox" value="${t.toLowerCase()}">
+              <span>${t}</span>
+            </label>`).join("")}
+        </div>
+        <div class="trait-actions">
+          <button id="traitConfirm">Confirm</button>
+          <button id="traitCancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const checkboxes = overlay.querySelectorAll("input[type=checkbox]");
+    checkboxes.forEach(cb => {
+      cb.addEventListener("change", () => {
+        const checked = overlay.querySelectorAll("input[type=checkbox]:checked");
+        if (checked.length > max) cb.checked = false;
+      });
+    });
+
+    overlay.querySelector("#traitConfirm").onclick = () => {
+      const selected = [...overlay.querySelectorAll("input:checked")].map(cb => cb.value);
+      overlay.remove();
+      resolve(selected);
+    };
+    overlay.querySelector("#traitCancel").onclick = () => {
+      overlay.remove();
+      resolve(null);
+    };
+  });
+}
 
 function ensureDoAnything(){
   if (!state.pc.skills.some(s => s.name === "Do Anything")) {
@@ -405,40 +477,63 @@ function ensureDoAnything(){
 }
 
 async function levelUpSkill(skill){
-  if(skill.name === "Do Anything"){ postDock("system", `"Do Anything" cannot be leveled.`); return; }
-  if(skill.tier < 4){
+  if (skill.name === "Do Anything") {
+    postDock("system", `"Do Anything" cannot be leveled.`);
+    return;
+  }
+
+  if (skill.tier < 4) {
     skill.tier += 1;
     postDock("system", `${skill.name} leveled up to Level ${skill.tier}.`);
-    await savePcSnapshot();
     ensureCampaignDoc().then(()=> saveTurn("system", `${skill.name} leveled to ${skill.tier}`));
+
+    // ✨ persist the updated PC (including skills)
+    await savePcSnapshot();
   } else {
+    // unlock specialization
     const base = skill.name.replace(/\s*\(Spec.*\)$/,'');
     const specName = prompt(
       `Create a specialization for "${base}" (e.g., "${base}: Rooftop Parkour")`,
       `${base}: Specialization`
     ) || `${base}: Specialization`;
+
     state.pc.skills.push({ name: specName, tier: 1, traits: skillTraits(skill) });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
-    await savePcSnapshot();
     ensureCampaignDoc().then(()=> saveTurn("system", `Unlocked specialization: ${specName}`));
+
+    // ✨ persist with the new specialization added
+    await savePcSnapshot();
   }
+
   renderSkills();
 }
 
-function maybeCreateNewSkillFromDoAnything(){
+async function maybeCreateNewSkillFromDoAnything(){
   const name = prompt("Success with Do Anything! Name the new related skill (Level 1):", "");
   if (!name) return;
+
   if (state.pc.skills.some(s => s.name.toLowerCase() === name.toLowerCase())) {
     postDock("system", `Skill "${name}" already exists.`);
     ensureCampaignDoc().then(()=> saveTurn("system", `Skill "${name}" already exists (Do Anything).`));
     return;
   }
-  const traitStr = prompt("Add 1–2 traits for this skill (comma-separated, e.g., social,cunning):", "");
-  const traits = (traitStr||"").split(",").map(s=>s.trim()).filter(Boolean).slice(0,2);
+
+  // Open the picker (choose up to 2 traits from the pool)
+  const picked = await openTraitPicker({ title: `Choose traits for "${name}"`, max: 2 });
+  if (!picked) { postDock("system", "Cancelled skill creation."); return; }
+
+  const traits = sanitizeTraitList(picked, 2); // lowercase + validated
+  if (traits.length === 0) {
+    postDock("system", "No valid traits selected; skill not created.");
+    return;
+  }
+
   state.pc.skills.push({ name, tier: 1, traits });
-  postDock("system", `New skill created: ${name} (Level 1) — traits: ${traits.join(", ")||"—"}.`);
+  postDock("system", `New skill created: ${name} (Level 1) — traits: ${traits.join(", ") || "—"}.`);
   ensureCampaignDoc().then(()=> saveTurn("system", `New skill created: ${name} (L1) traits=${traits.join(", ")||"—"}`));
+
   renderSkills();
+  await savePcSnapshot();
 }
 
 // ---------- Right tray wiring ----------
@@ -461,17 +556,17 @@ function renderSkills(){
   const wrap = document.getElementById("panel-skills");
   wrap.innerHTML = "";
 
-  state.pc.skills.forEach(s=>{
-    const level = s.tier;
+  (state.pc.skills || []).forEach((s) => {
+    const level = Number(s.tier || 1);
     const diceN = diceForLevel(level);
     const cost = xpCostToNext(level);
-    const enoughXP = state.pc.xp >= cost;
+    const enoughXP = (state.pc.xp || 0) >= cost;
     const isDoAnything = s.name === "Do Anything";
 
     const row = document.createElement("div");
     row.className = "skill";
     row.innerHTML = `
-      <button type="button" class="skillRollBtn" data-skill="${s.name}">
+      <button type="button" class="skillRollBtn" data-skill="${escapeHtml(s.name)}">
         ${escapeHtml(s.name)}
       </button>
       <div class="skillMeta">
@@ -479,54 +574,78 @@ function renderSkills(){
         <span class="pill">${diceN}d6</span>
         ${
           (Array.isArray(s.traits) && s.traits.length)
-            ? s.traits.map(t=>`<span class="pill soft">${escapeHtml(t)}</span>`).join("")
+            ? s.traits.map(t => `<span class="pill soft">${escapeHtml(String(t))}</span>`).join("")
             : ""
         }
       </div>
       <div class="skillActions"></div>
     `;
 
-    // Action buttons
+    // Roll handler
+    row.querySelector(".skillRollBtn")?.addEventListener("click", () => {
+      triggerRoll(s);
+    });
+
+    // Actions (level up / specialize)
     const actions = row.querySelector(".skillActions");
-    if(isDoAnything){
+    if (isDoAnything) {
       actions.innerHTML = `<button type="button" class="btn-soft tiny" disabled title="Cannot level Do Anything">Locked</button>`;
-    } else if (level < 4){
-      actions.innerHTML = `<button type="button" class="btn-soft tiny" data-levelup="${s.name}" ${enoughXP?'':'disabled'}>
-        Level Up (${cost} XP)
-      </button>`;
-    } else {
-      actions.innerHTML = `<button type="button" class="btn-soft tiny" data-special="${s.name}" ${enoughXP?'':'disabled'}>
-        Specialize (${xpCostToNext(level)} XP)
-      </button>`;
-    }
+    } else if (level < 4) {
+      actions.innerHTML = `
+        <button
+          type="button"
+          class="btn-soft tiny"
+          data-levelup
+          ${enoughXP ? "" : "disabled"}
+          title="${enoughXP ? `Spend ${cost} XP to reach Level ${level+1}` : `Need ${cost} XP`}"
+        >
+          Level Up (${cost} XP)
+        </button>
+      `;
 
-    row.querySelector(".skillRollBtn").addEventListener("click", ()=> triggerRoll(s));
-
-    if(!isDoAnything && level < 4){
-      const btn = row.querySelector("[data-levelup]");
-      btn && btn.addEventListener("click", ()=>{
+      const btn = actions.querySelector("[data-levelup]");
+      btn && btn.addEventListener("click", async () => {
         const need = xpCostToNext(s.tier);
-        if(state.pc.xp < need){
+        if ((state.pc.xp || 0) < need) {
           postDock("system", `Need ${need} XP to level up ${s.name}. You have ${state.pc.xp}.`);
-          ensureCampaignDoc().then(()=> saveTurn("system", `Insufficient XP to level ${s.name}`));
+          ensureCampaignDoc().then(() => saveTurn("system", `Insufficient XP to level ${s.name}`));
           return;
         }
+        // prevent double-click
+        btn.disabled = true;
+
         state.pc.xp -= need;
-        levelUpSkill(s);
+        await levelUpSkill(s);     // async; persists via savePcSnapshot() inside
         renderHealth();
         renderSkills();
       });
-    } else if (!isDoAnything && level >= 4) {
-      const btn = row.querySelector("[data-special]");
-      btn && btn.addEventListener("click", ()=>{
+
+    } else {
+      // level >= 4 → Specialization
+      actions.innerHTML = `
+        <button
+          type="button"
+          class="btn-soft tiny"
+          data-special
+          ${enoughXP ? "" : "disabled"}
+          title="${enoughXP ? `Spend ${cost} XP to unlock a specialization` : `Need ${cost} XP`}"
+        >
+          Specialize (${cost} XP)
+        </button>
+      `;
+
+      const btn = actions.querySelector("[data-special]");
+      btn && btn.addEventListener("click", async () => {
         const need = xpCostToNext(s.tier);
-        if(state.pc.xp < need){
+        if ((state.pc.xp || 0) < need) {
           postDock("system", `Need ${need} XP to unlock a specialization for ${s.name}. You have ${state.pc.xp}.`);
-          ensureCampaignDoc().then(()=> saveTurn("system", `Insufficient XP to specialize ${s.name}`));
+          ensureCampaignDoc().then(() => saveTurn("system", `Insufficient XP to specialize ${s.name}`));
           return;
         }
+        btn.disabled = true;
+
         state.pc.xp -= need;
-        levelUpSkill(s);
+        await levelUpSkill(s);     // async; persists via savePcSnapshot() inside
         renderHealth();
         renderSkills();
       });
@@ -535,6 +654,7 @@ function renderSkills(){
     wrap.appendChild(row);
   });
 }
+
 
 function renderInv(){
   const el = document.getElementById("invList");
@@ -714,7 +834,7 @@ function handleCommand(raw){
 }
 
 // ---------- Roll flow with Luck reroll ----------
-function triggerRoll(skill){
+async function triggerRoll(skill){
   if(!state.rollPending){
     postDock("system","No roll requested right now.");
     ensureCampaignDoc().then(()=> saveTurn("system","No roll requested."));
@@ -773,12 +893,12 @@ function triggerRoll(skill){
       renderHealth();
       renderSkills();
     } else if (resultTier === "success" && usedDoAnything){
-      maybeCreateNewSkillFromDoAnything();
+      await maybeCreateNewSkillFromDoAnything();
     }
     if(initialAllSixes){
       postDock('system', `ALL 6s! ${skill.name} levels up!`);
       ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
-      levelUpSkill(skill);
+      await levelUpSkill(skill);
       renderHealth();
       renderSkills();
     }
@@ -803,7 +923,7 @@ function triggerRoll(skill){
   if(initialAllSixes){
     postDock('system', `ALL 6s! ${skill.name} levels up!`);
     ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
-    levelUpSkill(skill);
+    await levelUpSkill(skill);
     renderHealth();
     renderSkills();
   }
@@ -862,7 +982,7 @@ async function finalizeRoll(wasReroll, providedRollObj){
   }
 
   if (ctx && ctx.skillRef && ctx.skillRef.name === "Do Anything" && ctx.rollObj.tierResult === "success") {
-    maybeCreateNewSkillFromDoAnything();
+   await maybeCreateNewSkillFromDoAnything();
   }
 
   if(state.testRolling){
@@ -966,10 +1086,10 @@ async function hydrateFromFirestoreByCid(){
       matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t).toLowerCase()) : []
     }));
 
-    const skills = Array.isArray(pc.skills) ? pc.skills.map(s => (
-      typeof s === "string"
-        ? { name: String(s), tier: 1, traits: [] }
-        : { name: String(s.name || ""), tier: Math.max(1, Math.min(4, Number(s.tier || 1))), traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t)) : [] }
+     const skills = Array.isArray(pc.skills) ? pc.skills.map(s => (
+     typeof s === "string"
+    ? { name: String(s), tier: 1, traits: [] }
+   : { name: String(s.name || ""), tier: Math.max(1, Math.min(4, Number(s.tier || 1))), traits: sanitizeTraitList(s.traits, 2) }
     )) : [];
 
     state.pc = {
@@ -1046,7 +1166,7 @@ document.getElementById("sendBtn").onclick = async ()=>{
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
 // ---------- Starter Kit (strict; no fallbacks) ----------
-async function maybeGenerateStarterKit(){
+}async function maybeGenerateStarterKit(){
   ensureDoAnything();
 
   const nonDA = (state.pc.skills || []).filter(s => s.name.toLowerCase() !== "do anything");
@@ -1055,13 +1175,17 @@ async function maybeGenerateStarterKit(){
   if (!needSkills && !needItems) return false;
 
   const card = buildCampaignCard();
+  const allowedListCsv = TRAIT_POOL.join(", ");
+
   const prompt = [
     "Return STRICT JSON only. No OOC, no code fences, no narrative.",
     "",
     "Create EXACTLY 3 starter skills and EXACTLY 3 starter items for the PC below.",
     "Constraints:",
-    "- skills: { name: string, level: 1, traits: array of 1–2 short lowercase tags }",
-    "- items:  { name: string, qty: positive integer, matches: array of 1–2 short lowercase tags }",
+    "- traits must be selected ONLY from this allowed list:",
+    allowedListCsv,
+    "- skills: { name: string, level: 1, traits: array of 1–2 entries from the allowed list }",
+    "- items:  { name: string, qty: positive integer, matches: array of 1–2 entries from the allowed list }",
     "- names should be concise and fiction-friendly (no colons).",
     "- items should correlate to the skills' traits where sensible.",
     "",
@@ -1086,8 +1210,6 @@ async function maybeGenerateStarterKit(){
     return false;
   }
 
-  console.log("[StarterKit raw]", text);
-
   const jsonStr = extractFirstJsonObject(text);
   let parsed;
   try {
@@ -1107,15 +1229,37 @@ async function maybeGenerateStarterKit(){
     return false;
   }
 
+  // Strict validation: traits MUST be from allowed pool (case-insensitive), 1–2 each
+  function allTraitsValid(arr){
+    if (!Array.isArray(arr) || arr.length < 1 || arr.length > 2) return false;
+    return arr.every(t => isAllowedTrait(t));
+  }
+
+  // Validate + sanitize to lowercase storage
+  for (const s of skillsIn) {
+    if (!s || !s.name || !allTraitsValid(s.traits)) {
+      postDock("system", "Starter kit invalid; traits must be chosen from allowed list.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit invalid traits; nothing generated."));
+      return false;
+    }
+  }
+  for (const it of itemsIn) {
+    if (!it || !it.name || !Number(it.qty) || !allTraitsValid(it.matches)) {
+      postDock("system", "Starter kit invalid; item matches must be from allowed list.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit invalid matches; nothing generated."));
+      return false;
+    }
+  }
+
   const skills = skillsIn.map(s => ({
     name: String(s.name || "").slice(0,64),
     tier: 1,
-    traits: Array.isArray(s.traits) ? s.traits.slice(0,2).map(t=>String(t).toLowerCase()) : []
+    traits: sanitizeTraitList(s.traits, 2) // lowercase, filtered
   }));
   const items  = itemsIn.map(it => ({
     name: String(it.name || "").slice(0,64),
     qty: Math.max(1, Number(it.qty || 1)),
-    matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t).toLowerCase()) : []
+    matches: sanitizeTraitList(it.matches, 2) // lowercase, filtered
   }));
 
   if (needSkills) {
@@ -1130,12 +1274,13 @@ async function maybeGenerateStarterKit(){
 
   renderSkills();
   renderInv();
-await savePcSnapshot();
-  
+  await savePcSnapshot();
+
   postDock("system", "Starter kit created: 3 skills + 3 items.");
   ensureCampaignDoc().then(()=> saveTurn("system", "Starter kit created: 3 skills + 3 items."));
   return true;
 }
+
 
 // ---------- Auth + Boot ----------
 async function ensureSignedIn() {
