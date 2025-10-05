@@ -1,4 +1,3 @@
-// campaigns.js — COMPLETE REPLACEMENT (draft-first flow)
 
 // ----- Firebase (CDN v11) -----
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
@@ -10,6 +9,7 @@ import {
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-functions.js";
+import { getStorage, ref, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-storage.js";
 
 import { firebaseConfig } from "./firebaseConfigShim.js";
 
@@ -18,6 +18,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const functions = getFunctions(app, "us-central1"); // match your CF region
+const storage = getStorage(app);
 
 // ----- DOM refs -----
 const listEl             = document.getElementById("campaignList");
@@ -177,7 +178,6 @@ pcDraft = {
   name,
   description: pcDescription.value.trim(),
   background: pcBackground.value.trim(),
-  portraitDataUrl: imageDataUrl || null,
   portraitDataUrl: imageDataUrl || DEFAULT_IMG, // <-- ensure profiledef.png is saved
   traits: {
     Charisma: traitValues.Charisma,
@@ -204,16 +204,26 @@ pcDraft = {
 createCampaignBtn?.addEventListener("click", async ()=>{
   const user = auth.currentUser;
   if (!user) { alert("Please sign in first."); return; }
-
-  if (!pcDraft) {
-    alert("Please create a character first.");
-    return;
-  }
+  if (!pcDraft) { alert("Please create a character first."); return; }
 
   const name    = (campaignName?.value || "").trim() || `${pcDraft.name}'s Campaign`;
   const theme   = (campaignTheme?.value || "").trim();
   const setting = (campaignSetting?.value || "").trim();
   const premise = (campaignPremise?.value || "").trim();
+
+  // 1) Upload portrait to Cloud Storage if we have a user-provided dataURL
+  let portraitUrl = null;
+  if (pcDraft.portraitDataUrl && pcDraft.portraitDataUrl.startsWith("data:")) {
+    const cid = crypto.randomUUID();
+    const path = `users/${user.uid}/campaign_portraits/${cid}.jpg`;
+    const portraitRef = ref(storage, path);
+	const toUpload = await downscaleDataUrl(pcDraft.portraitDataUrl, 384, 0.8);
+    await uploadString(portraitRef, toUpload, "data_url");
+    portraitUrl = await getDownloadURL(portraitRef);
+  } else {
+    // fallback to your bundled default
+    portraitUrl = "profiledef.png";
+  }
 
   const payload = {
     uid: user.uid,
@@ -223,23 +233,37 @@ createCampaignBtn?.addEventListener("click", async ()=>{
     premise,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    pc: pcDraft
+
+  pc: {
+    name: pcDraft.name,
+    description: pcDraft.description,
+    background: pcDraft.background,
+    traits: pcDraft.traits,
+    portraitUrl // <-- small URL string instead of huge base64
+  }
   };
 
   try {
     await addDoc(collection(db, "campaigns"), payload);
-    // Optionally clear the draft so users don't accidentally reuse it
-    // pcDraft = null;
-    // if (charSummary) charSummary.textContent = "No character yet. Click to create.";
-
-    // Optional: quick feedback or redirect
     alert("Campaign created!");
   } catch (err) {
     console.error(err);
     alert("Create failed: " + (err.message || err));
   }
 });
-
+async function downscaleDataUrl(dataUrl, maxW = 384, quality = 0.8) {
+  const img = new Image();
+  img.src = dataUrl;
+  await img.decode();
+  const scale = Math.min(1, maxW / img.width);
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL("image/jpeg", quality);
+}
 // =====================================================
 //              Campaign list + delete (CF)
 // =====================================================
