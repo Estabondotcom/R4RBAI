@@ -1007,6 +1007,28 @@ async function finalizeRoll(wasReroll, providedRollObj){
   }
   state.pendingReroll = null;
 }
+// Delegated handler for dynamic roll buttons (use classes)
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".btn-reroll-lowest, .btn-resolve");
+  if (!btn) return;
+
+  // prevent accidental double-fires
+  if (btn.dataset.busy === "1") return;
+  btn.dataset.busy = "1";
+
+  try {
+    if (btn.matches(".btn-reroll-lowest")) {
+      doLuckReroll();
+    } else if (btn.matches(".btn-resolve")) {
+      finalizeRoll(false);
+    }
+  } catch (err) {
+    console.error("resolve/reroll error:", err);
+    alert("That didn’t go through. Please try again.");
+  } finally {
+    btn.dataset.busy = "0";
+  }
+}, { passive: true });
 
 // ---------- AI turn handler ----------
 async function aiTurnHandler(payload){
