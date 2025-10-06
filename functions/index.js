@@ -1,6 +1,5 @@
 // functions/index.js
-// deleteCampaign is now callable (onCall) → no CORS needed.
-// aiTurn remains HTTP (onRequest) with CORS for your GitHub Pages site.
+// deleteCampaign is callable (onCall); aiTurn is HTTP (onRequest) with CORS.
 
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
@@ -9,9 +8,7 @@ import corsLib from "cors";
 import OpenAI from "openai";
 
 // ─────────────────────────── Firebase Admin init ───────────────────────────
-if (!admin.apps.length) {
-  admin.initializeApp();
-}
+if (!admin.apps.length) admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
 // ───────────────────────────── deleteCampaign ──────────────────────────────
@@ -20,21 +17,16 @@ export const deleteCampaign = onCall(async (request) => {
   if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
 
   const campaignId = request.data?.campaignId;
-  if (!campaignId || typeof campaignId !== "string") {
+  if (!campaignId || typeof campaignId !== "string")
     throw new HttpsError("invalid-argument", "campaignId is required.");
-  }
 
   const ref = admin.firestore().collection("campaigns").doc(campaignId);
   const snap = await ref.get();
-  if (!snap.exists) {
-    // Idempotent delete: treat missing doc as success
-    return { ok: true, message: "Not found (already deleted)" };
-  }
+  if (!snap.exists) return { ok: true, message: "Not found (already deleted)" };
 
   const data = snap.data();
-  if (data.uid !== uid) {
+  if (data.uid && data.uid !== uid)
     throw new HttpsError("permission-denied", "Not your campaign.");
-  }
 
   await admin.firestore().recursiveDelete(ref);
   return { ok: true };
@@ -57,6 +49,7 @@ export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
     try {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const body = req.body || {};
+
       const system = `You are the AI GM for "Roll for Rocket Boots".
 Reply in two parts:
 1) First line: {"ooc":{"need_roll":true|false,"skill":"<Skill>","dieTier":1..4,"difficulty":8..24,"note":"optional","prompt":"optional"}}
@@ -77,10 +70,22 @@ Skill usage constraints:
 - Use "Do Anything" only as a fallback when no existing skill reasonably applies.
 - If even "Do Anything" would be redundant, resolve narratively instead of requesting a roll.
 
+Inventory updates:
+- If granting or removing items, include an OOC object in the FIRST LINE JSON under "inventory".
+- STRICT schema:
+  "inventory": {
+    "add": [{"name":"", "qty":1, "matches":["trait1","trait2"]}],
+    "remove": [{"name":"", "qty":1}]
+  }
+- "matches" traits MUST come only from state_summary.pc.traits or the allowed trait pool provided by the client.
+- Never invent trait names outside that allowed list.
+- Never exceed 3 items per turn, qty 1–3 per item.
+- If no items are awarded/removed, omit "inventory".
+
 Behavior:
 - Stay within the tone of a lighthearted, narrative-driven tabletop RPG.
 - Prefer describing the consequences of actions and world reactions.
-- If uncertain, ask clarifying questions rather than assuming new skills or powers.`;
+- If uncertain, ask clarifying questions rather than assuming new skills or powers.`.trim();
 
       const resp = await openai.chat.completions.create({
         model: "gpt-4o-mini",

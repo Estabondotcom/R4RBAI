@@ -1050,6 +1050,58 @@ async function aiTurnHandler(payload){
     let ooc = null;
     try { ooc = JSON.parse(firstLine).ooc; }
     catch(e){ postDock('system','(AI format error)'); ensureCampaignDoc().then(()=> saveTurn("system","AI format error.")); return; }
+// after: let ooc = null; try { ooc = JSON.parse(firstLine).ooc; } ...
+if (ooc?.inventory) {
+  const added = Array.isArray(ooc.inventory.add) ? ooc.inventory.add : [];
+  const removed = Array.isArray(ooc.inventory.remove) ? ooc.inventory.remove : [];
+
+  // helper to push an item, merging if it already exists
+  function addItemSafe({ name, qty = 1, matches = [] }) {
+    name = String(name || "").trim().slice(0, 64);
+    qty = Math.max(1, Math.min(3, Number(qty) || 1));
+    const traits = sanitizeTraitList(matches, 2); // uses your existing helper; enforces allowed pool
+
+    if (!name) return false;
+
+    const existing = state.inv.find(it => it.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      existing.qty = Math.max(1, existing.qty + qty);
+      existing.matches = sanitizeTraitList([...(existing.matches || []), ...traits], 2);
+    } else {
+      state.inv.push({ name, qty, matches: traits });
+    }
+    return true;
+  }
+
+  // helper to remove/decrement
+  function removeItemSafe({ name, qty = 1 }) {
+    name = String(name || "").trim();
+    qty = Math.max(1, Math.min(3, Number(qty) || 1));
+    if (!name) return false;
+
+    const idx = state.inv.findIndex(it => it.name.toLowerCase() === name.toLowerCase());
+    if (idx === -1) return false;
+
+    state.inv[idx].qty -= qty;
+    if (state.inv[idx].qty <= 0) state.inv.splice(idx, 1);
+    return true;
+  }
+
+  // enforce small limits per turn
+  const adds = added.slice(0, 3);
+  const rems = removed.slice(0, 3);
+
+  let didChange = false;
+  for (const it of adds)  didChange = addItemSafe(it) || didChange;
+  for (const it of rems)  didChange = removeItemSafe(it) || didChange;
+
+  if (didChange) {
+    renderInv();
+    await savePcSnapshot(); // persist to Firestore
+    postDock("system", "Inventory updated.");
+    ensureCampaignDoc().then(() => saveTurn("system", "Inventory updated.")); // optional log
+  }
+}
 
     if(ooc.need_roll){
       state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty, aid:0 };
