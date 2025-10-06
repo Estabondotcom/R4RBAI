@@ -1358,18 +1358,6 @@ window.addEventListener('load', async ()=>{
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
-// ---------- Global delegation for dynamic roll buttons ----------
-document.addEventListener('click', (e) => {
-  const reroll = e.target.closest('#btnRerollLowest');
-  const resolve = e.target.closest('#btnResolve');
-  if (reroll) {
-    e.preventDefault();
-    doLuckReroll();
-  } else if (resolve) {
-    e.preventDefault();
-    finalizeRoll(false);
-  }
-});
   // 5) AI kickoff ONLY if no prior turns (fresh campaign)
   if (turnCount === 0) {
     aiTurnHandler({
