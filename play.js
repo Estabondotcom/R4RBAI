@@ -32,7 +32,8 @@ const scrollLock = document.getElementById("scrollLock");
 // ---------- AI Config ----------
 const USE_AI = true;
 // Your deployed AI endpoint:
-const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app";
+const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn";
+
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
