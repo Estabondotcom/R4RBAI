@@ -20,7 +20,8 @@ const state = {
   testRolling: false,
   pendingReroll: null,
   storySummary: "",        // rolling recap the AI can read
-  isReplayingHistory: false
+  isReplayingHistory: false,
+  pendingLoot: null        // ✨ NEW: holds proposed items awaiting player choice
 };
 
 // ---------- DOM refs ----------
@@ -31,8 +32,8 @@ const scrollLock = document.getElementById("scrollLock");
 
 // ---------- AI Config ----------
 const USE_AI = true;
-// Your deployed AI endpoint:
-const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app";
+// Your deployed AI endpoint (use the Firebase Function so prompt rules apply):
+const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn"; // ✨ NEW
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
@@ -145,16 +146,16 @@ async function savePcSnapshot(extra = {}) {
     statuses: Array.isArray(state.pc.statuses) ? state.pc.statuses.map(String) : [],
     traits: state.pc.traits || null,
     skills: (state.pc.skills || []).map(s => ({
-    name: String(s.name || ""),
-    tier: Math.max(1, Math.min(4, Number(s.tier || 1))),
-    traits: sanitizeTraitList(s.traits, 2)
- }))
+      name: String(s.name || ""),
+      tier: Math.max(1, Math.min(4, Number(s.tier || 1))),
+      traits: sanitizeTraitList(s.traits, 2)
+    }))
   };
-   const inv = (state.inv || []).map(it => ({
-   name: String(it.name || ""),
-   qty: Math.max(1, Number(it.qty || 1)),
-   matches: sanitizeTraitList(it.matches, 2)
-}));
+  const inv = (state.inv || []).map(it => ({
+    name: String(it.name || ""),
+    qty: Math.max(1, Number(it.qty || 1)),
+    matches: sanitizeTraitList(it.matches, 2)
+  }));
 
   await setDoc(ref, { pc, inv, updatedAt: serverTimestamp(), ...extra }, { merge: true });
 }
@@ -426,6 +427,7 @@ function sanitizeTraitList(arr, max=2){
   }
   return out;
 }
+
 // ---------- Trait Picker Modal Helper ----------
 async function openTraitPicker({ title = "Choose Traits", max = 2 } = {}) {
   return new Promise((resolve) => {
@@ -654,7 +656,6 @@ function renderSkills(){
     wrap.appendChild(row);
   });
 }
-
 
 function renderInv(){
   const el = document.getElementById("invList");
@@ -910,20 +911,19 @@ async function triggerRoll(skill){
   const msg = postDock("system", "You may spend 1 Luck to reroll your lowest die, or resolve as-is.");
   ensureCampaignDoc().then(()=> saveTurn("system","Offered Luck reroll."));
   const controls = document.createElement("div");
-controls.className = "roll-controls";
-controls.innerHTML = `
-  <div class="row gap-8">
-    <button type="button" class="btn-soft tiny btn-reroll-lowest" data-action="reroll-lowest">
-      Reroll Lowest (1 Luck)
-    </button>
-    <button type="button" class="btn-soft tiny btn-resolve" data-action="resolve">
-      Resolve
-    </button>
-  </div>
-`;
-msg.appendChild(controls);
+  controls.className = "roll-controls";
+  controls.innerHTML = `
+    <div class="row gap-8">
+      <button type="button" class="btn-soft tiny btn-reroll-lowest" data-action="reroll-lowest">
+        Reroll Lowest (1 Luck)
+      </button>
+      <button type="button" class="btn-soft tiny btn-resolve" data-action="resolve">
+        Resolve
+      </button>
+    </div>
+  `;
+  msg.appendChild(controls);
 
-  
   if(initialAllSixes){
     postDock('system', `ALL 6s! ${skill.name} levels up!`);
     ensureCampaignDoc().then(()=> saveTurn("system", `ALL 6s! ${skill.name} levels up!`));
@@ -986,7 +986,7 @@ async function finalizeRoll(wasReroll, providedRollObj){
   }
 
   if (ctx && ctx.skillRef && ctx.skillRef.name === "Do Anything" && ctx.rollObj.tierResult === "success") {
-   await maybeCreateNewSkillFromDoAnything();
+    await maybeCreateNewSkillFromDoAnything();
   }
 
   if(state.testRolling){
@@ -1007,6 +1007,7 @@ async function finalizeRoll(wasReroll, providedRollObj){
   }
   state.pendingReroll = null;
 }
+
 // Delegated handler for dynamic roll buttons (use classes)
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".btn-reroll-lowest, .btn-resolve");
@@ -1027,6 +1028,79 @@ document.addEventListener("click", (e) => {
     alert("That didn’t go through. Please try again.");
   } finally {
     btn.dataset.busy = "0";
+  }
+}, { passive: true });
+
+// ---------- Loot helpers (proposal workflow) ----------
+// Merge item into state inventory safely
+function addItemToState({ name, qty = 1, matches = [] }) { // ✨ NEW
+  name = String(name || "").trim().slice(0, 64);
+  qty = Math.max(1, Math.min(3, Number(qty) || 1));
+  const traits = sanitizeTraitList(matches, 2); // validates against trait pool
+  if (!name) return false;
+
+  const existing = state.inv.find(it => it.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    existing.qty = Math.max(1, existing.qty + qty);
+    existing.matches = sanitizeTraitList([...(existing.matches || []), ...traits], 2);
+  } else {
+    state.inv.push({ name, qty, matches: traits });
+  }
+  return true;
+}
+
+// Show Accept/Decline UI in the dock
+function showLootPrompt(proposal) { // ✨ NEW
+  const adds = Array.isArray(proposal?.add) ? proposal.add.slice(0,3) : [];
+  if (!adds.length) return;
+
+  state.pendingLoot = adds;
+
+  const lines = adds.map(it => {
+    const qty = Math.max(1, Number(it.qty) || 1);
+    const tags = (Array.isArray(it.matches) ? it.matches.slice(0,2) : []).join(", ");
+    const why  = it.why ? ` — ${escapeHtml(String(it.why))}` : "";
+    return `• ${escapeHtml(String(it.name||""))} ×${qty}${tags ? ` [${escapeHtml(tags)}]` : ""}${why}`;
+  }).join("<br>");
+
+  const msg = postDock("system", "Loot proposed:");
+  const box = document.createElement("div");
+  box.className = "loot-proposal";
+  box.style.margin = "8px 0";
+  box.innerHTML = `
+    <div class="loot-list" style="margin:6px 0 10px">${lines}</div>
+    <div class="row gap-8">
+      <button type="button" class="btn-soft tiny btn-loot-accept">Accept Loot</button>
+      <button type="button" class="btn-soft tiny btn-loot-decline">Decline</button>
+    </div>
+  `;
+  msg.appendChild(box);
+}
+
+// Delegated Accept/Decline handlers
+document.addEventListener("click", async (e) => { // ✨ NEW
+  const accept = e.target.closest(".btn-loot-accept");
+  const decline = e.target.closest(".btn-loot-decline");
+  if (!accept && !decline) return;
+
+  if (accept) {
+    const items = Array.isArray(state.pendingLoot) ? state.pendingLoot : [];
+    let changed = false;
+    for (const it of items) changed = addItemToState(it) || changed;
+    state.pendingLoot = null;
+
+    if (changed) {
+      renderInv();
+      await savePcSnapshot();
+      postDock("system", "Loot accepted. Inventory updated.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Loot accepted (inventory updated)."));
+    } else {
+      postDock("system", "Nothing to add.");
+    }
+  } else if (decline) {
+    state.pendingLoot = null;
+    postDock("system", "Loot declined.");
+    ensureCampaignDoc().then(()=> saveTurn("system", "Loot declined."));
   }
 }, { passive: true });
 
@@ -1060,59 +1134,17 @@ async function aiTurnHandler(payload){
       ensureCampaignDoc().then(()=> saveTurn("system","AI format error."));
       return;
     }
-    console.debug("[AI] OOC:", ooc);
-	console.debug("[AI] inventory:", ooc?.inventory || firstObj?.inventory || null);
 
-    // ----- Inventory updates (accept ooc.inventory OR top-level inventory) -----
-    const invBlock = ooc?.inventory || firstObj?.inventory;
-    if (invBlock) {
-      const added = Array.isArray(invBlock.add) ? invBlock.add : [];
-      const removed = Array.isArray(invBlock.remove) ? invBlock.remove : [];
-
-      function addItemSafe({ name, qty = 1, matches = [] }) {
-        name = String(name || "").trim().slice(0, 64);
-        qty = Math.max(1, Math.min(3, Number(qty) || 1));
-        const traits = sanitizeTraitList(matches, 2); // validates against TRAIT_POOL
-        if (!name) return false;
-
-        const existing = state.inv.find(it => it.name.toLowerCase() === name.toLowerCase());
-        if (existing) {
-          existing.qty = Math.max(1, existing.qty + qty);
-          existing.matches = sanitizeTraitList([...(existing.matches || []), ...traits], 2);
-        } else {
-          state.inv.push({ name, qty, matches: traits });
-        }
-        return true;
-      }
-
-      function removeItemSafe({ name, qty = 1 }) {
-        name = String(name || "").trim();
-        qty = Math.max(1, Math.min(3, Number(qty) || 1));
-        if (!name) return false;
-
-        const idx = state.inv.findIndex(it => it.name.toLowerCase() === name.toLowerCase());
-        if (idx === -1) return false;
-
-        state.inv[idx].qty -= qty;
-        if (state.inv[idx].qty <= 0) state.inv.splice(idx, 1);
-        return true;
-      }
-
-      const adds = added.slice(0, 3);
-      const rems = removed.slice(0, 3);
-
-      let didChange = false;
-      for (const it of adds)  didChange = addItemSafe(it) || didChange;
-      for (const it of rems)  didChange = removeItemSafe(it) || didChange;
-
-      if (didChange) {
-        renderInv();
-        await savePcSnapshot();
-        postDock("system", "Inventory updated.");
-        ensureCampaignDoc().then(() => saveTurn("system", "Inventory updated."));
-      }
+    // ----- Loot proposals (NO auto-adding) -----
+    const invProposal =
+      ooc?.inventory_proposal ||
+      ooc?.inventoryProposal ||
+      firstObj?.inventory_proposal ||
+      firstObj?.inventoryProposal;
+    if (invProposal) {
+      showLootPrompt(invProposal);
     }
-    // --------------------------------------------------------------------------
+    // -------------------------------------------
 
     if(ooc.need_roll){
       state.rollPending = { skill:ooc.skill, difficulty:ooc.difficulty, aid:0 };
@@ -1141,7 +1173,6 @@ async function aiTurnHandler(payload){
     ensureCampaignDoc().then(()=> saveTurn("system","AI request failed."));
   }
 }
-
 
 // ---------- URL + hydration ----------
 function getQueryParam(name){
@@ -1177,10 +1208,10 @@ async function hydrateFromFirestoreByCid(){
       matches: Array.isArray(it.matches) ? it.matches.slice(0,2).map(t=>String(t).toLowerCase()) : []
     }));
 
-     const skills = Array.isArray(pc.skills) ? pc.skills.map(s => (
-     typeof s === "string"
-    ? { name: String(s), tier: 1, traits: [] }
-   : { name: String(s.name || ""), tier: Math.max(1, Math.min(4, Number(s.tier || 1))), traits: sanitizeTraitList(s.traits, 2) }
+    const skills = Array.isArray(pc.skills) ? pc.skills.map(s => (
+      typeof s === "string"
+      ? { name: String(s), tier: 1, traits: [] }
+      : { name: String(s.name || ""), tier: Math.max(1, Math.min(4, Number(s.tier || 1))), traits: sanitizeTraitList(s.traits, 2) }
     )) : [];
 
     state.pc = {
@@ -1372,7 +1403,6 @@ async function maybeGenerateStarterKit(){
   return true;
 }
 
-
 // ---------- Auth + Boot ----------
 async function ensureSignedIn() {
   return new Promise((resolve, reject) => {
@@ -1443,4 +1473,3 @@ window.addEventListener('load', async ()=>{
     postDock("system", `Loaded ${turnCount} prior turns from campaign history.`);
   }
 });
-
