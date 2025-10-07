@@ -33,7 +33,7 @@ const scrollLock = document.getElementById("scrollLock");
 // ---------- AI Config ----------
 const USE_AI = true;
 // Your deployed AI endpoint (use the Firebase Function so prompt rules apply):
-const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn"; // ✨ NEW
+const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app"; // ✨ NEW
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
