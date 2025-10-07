@@ -33,7 +33,7 @@ const scrollLock = document.getElementById("scrollLock");
 // ---------- AI Config ----------
 const USE_AI = true;
 // Your deployed AI endpoint (use the Firebase Function so prompt rules apply):
-const AI_URL = "https://aiturn-gyp3ryw5ga-uc.a.run.app"; // ✨ NEW
+const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn"; // ✨ NEW
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
@@ -762,38 +762,9 @@ function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({ "&":"&amp;","<":
 
 // ---------- Commands ----------
 function handleCommand(raw){
-  // NEW: *ooc- ...*  -> force an OOC-only response (no narration)
-  const mOOC = raw.match(/^\*ooc-\s*(.+)\*$/i);
-  if (mOOC) {
-    const oocText = mOOC[1].trim();
-    postDock("you", `(OOC) ${oocText}`);
-    ensureCampaignDoc().then(()=> saveTurn("you", `(OOC) ${oocText}`));
-
-    (async () => {
-      const recent = await getRecentTurnsForAI(6);
-      // Tell the AI to output ONLY the OOC first line (no NARRATIVE)
-      aiTurnHandler({
-        recent_turns: recent,
-        story_summary: state.storySummary || "",
-        player_input: [
-          "Respond ONLY with the first-line OOC JSON.",
-          "Set need_roll=false unless a roll is truly required.",
-          `Use this OOC prompt text: ${oocText}`,
-          "Do NOT include NARRATIVE."
-        ].join("\n"),
-        meta: { suppressNarrative: true } // client-side guard
-      });
-    })();
-
-    return true;
-  }
-
-  const m = raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i);
-  if (!m) return false;
-
-  const cmd = m[1].toLowerCase();
-  const argN = m[2] != null ? parseInt(m[2],10) : null;
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+  const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
+  const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
+  const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
 
   // *addstatus drunk* / *removestatus drunk*
   const mStatus = raw.match(/^\*(addstatus|removestatus)\s+(.+)\*$/i);
@@ -815,77 +786,15 @@ function handleCommand(raw){
     return true;
   }
 
-  switch (cmd) {
-    // NEW: *promptadditem*  -> ask AI to propose 1 item via inventory_proposal (no narration)
-    case "promptadditem": {
-      postDock("system", "Requesting loot proposal…");
-      ensureCampaignDoc().then(()=> saveTurn("system", "Requested loot proposal."));
-      const allowedListCsv = TRAIT_POOL.join(", ");
-
-      (async () => {
-        const recent = await getRecentTurnsForAI(6);
-        aiTurnHandler({
-          recent_turns: recent,
-          story_summary: state.storySummary || "",
-          // Ask the GM to propose exactly one item as an inventory_proposal
-          player_input: [
-            "Propose EXACTLY 1 item using inventory_proposal.add.",
-            "Include fields: name, qty (1), matches (1–2 from the allowed list), and a short 'why'.",
-            "Use the OOC 'prompt' to ask the player if they want it.",
-            "Do NOT auto-add items; no 'inventory' block—proposal only.",
-            "Return ONLY the first-line OOC JSON; omit NARRATIVE.",
-            "",
-            "Allowed traits:",
-            allowedListCsv
-          ].join("\n"),
-          meta: { suppressNarrative: true } // client-side guard
-        });
-      })();
-
-      return true;
-    }
-
-    // NEW: *debugloot*  -> local test of loot UI (no AI)
-    case "debugloot": {
-      const fake = {
-        add: [{ name: "Compact Toolkit", qty: 1, matches: ["tech","crafting"], why: "baseline field repairs" }]
-      };
-      showLootPrompt(fake);
-      postDock("system", "Debug loot proposed.");
-      ensureCampaignDoc().then(()=> saveTurn("system", "Debug loot proposed."));
-      return true;
-    }
-
-    // NEW: *additem*  -> quick manual add (no AI)
-    case "additem": {
-      const name = prompt("Item name?", "Medkit");
-      if (!name) { postDock("system","Cancelled."); return true; }
-      const traits = (prompt("Comma-separated traits (e.g., survival,crafting)", "survival") || "")
-                      .split(",").map(s=>s.trim()).filter(Boolean);
-      const ok = addItemToState({ name, qty: 1, matches: traits });
-      if (ok) {
-        renderInv();
-        savePcSnapshot();
-        postDock("system", `Added "${name}" to inventory.`);
-        ensureCampaignDoc().then(()=> saveTurn("system", `Added item "${name}"`));
-      } else {
-        postDock("system", `Could not add item.`);
-      }
-      return true;
-    }
-
+  switch(cmd){
     case "addluck":
       state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
-
     case "removeluck":
       state.pc.luck = Math.max(0, state.pc.luck - 1); renderHealth(); postDock("system",`Luck -1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck -1`)); return true;
-
     case "addwound":
       state.pc.wounds = clamp(state.pc.wounds + 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound +1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound +1`)); return true;
-
     case "removewound":
       state.pc.wounds = clamp(state.pc.wounds - 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound -1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound -1`)); return true;
-
     case "addxp": {
       const n = Number.isFinite(argN) ? argN : 1;
       state.pc.xp = Math.max(0, state.pc.xp + n);
@@ -896,14 +805,12 @@ function handleCommand(raw){
       ensureCampaignDoc().then(()=> saveTurn("system", msg));
       return true;
     }
-
     case "newsession":
       state.pc.luck = RULES?.luck?.start ?? 1;
       postDock("system",`New session: Luck reset to ${state.pc.luck}.`);
       ensureCampaignDoc().then(()=> saveTurn("system",`New session: Luck ${state.pc.luck}`));
       renderHealth();
       return true;
-
     case "togglerolling":
       state.testRolling = !state.testRolling;
       if(state.testRolling){
@@ -916,18 +823,17 @@ function handleCommand(raw){
         postDock('system','Test rolling: OFF');
       }
       return true;
-
     case "summary":
       postDock("system", state.storySummary || "(no summary yet)");
       ensureCampaignDoc().then(()=> saveTurn("system","(requested summary)"));
       return true;
-
     default:
       postDock("system",`Unknown command: ${cmd}`);
       ensureCampaignDoc().then(()=> saveTurn("system",`Unknown command: ${cmd}`));
       return true;
   }
 }
+
 // ---------- Roll flow with Luck reroll ----------
 async function triggerRoll(skill){
   if(!state.rollPending){
@@ -1256,11 +1162,11 @@ async function aiTurnHandler(payload){
     }
 
     const restJoined = rest.join('\n');
-const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
-if (narrative && !(payload?.meta?.suppressNarrative)) {
-  appendToBook(narrative);
-  ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
-}
+    const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
+    if(narrative){
+      appendToBook(narrative);
+      ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
+    }
   }catch(err){
     console.error(err);
     postDock('system', 'AI request failed.');
