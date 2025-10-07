@@ -762,6 +762,32 @@ function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({ "&":"&amp;","<":
 
 // ---------- Commands ----------
 function handleCommand(raw){
+  // NEW: *ooc- ...*  -> force an OOC-only response (no narration)
+  const mOOC = raw.match(/^\*ooc-\s*(.+)\*$/i);
+  if (mOOC) {
+    const oocText = mOOC[1].trim();
+    postDock("you", `(OOC) ${oocText}`);
+    ensureCampaignDoc().then(()=> saveTurn("you", `(OOC) ${oocText}`));
+
+    (async () => {
+      const recent = await getRecentTurnsForAI(6);
+      // Tell the AI to output ONLY the OOC first line (no NARRATIVE)
+      aiTurnHandler({
+        recent_turns: recent,
+        story_summary: state.storySummary || "",
+        player_input: [
+          "Respond ONLY with the first-line OOC JSON.",
+          "Set need_roll=false unless a roll is truly required.",
+          `Use this OOC prompt text: ${oocText}`,
+          "Do NOT include NARRATIVE."
+        ].join("\n"),
+        meta: { suppressNarrative: true } // client-side guard
+      });
+    })();
+
+    return true;
+  }
+
   const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
   const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
   const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
@@ -787,6 +813,35 @@ function handleCommand(raw){
   }
 
   switch(cmd){
+    // NEW: *promptadditem*  -> ask AI to propose 1 item via inventory_proposal (no narration)
+    case "promptadditem": {
+      postDock("system", "Requesting loot proposal…");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Requested loot proposal."));
+      const allowedListCsv = TRAIT_POOL.join(", ");
+
+      (async () => {
+        const recent = await getRecentTurnsForAI(6);
+        aiTurnHandler({
+          recent_turns: recent,
+          story_summary: state.storySummary || "",
+          // Ask the GM to propose exactly one item as an inventory_proposal
+          player_input: [
+            "Propose EXACTLY 1 item using inventory_proposal.add.",
+            "Include fields: name, qty (1), matches (1–2 from the allowed list), and a short 'why'.",
+            "Use the OOC 'prompt' to ask the player if they want it.",
+            "Do NOT auto-add items; no 'inventory' block—proposal only.",
+            "Return ONLY the first-line OOC JSON; omit NARRATIVE.",
+            "",
+            "Allowed traits:",
+            allowedListCsv
+          ].join("\n"),
+          meta: { suppressNarrative: true } // client-side guard
+        });
+      })();
+
+      return true;
+    }
+
     case "addluck":
       state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
     case "removeluck":
@@ -833,7 +888,6 @@ function handleCommand(raw){
       return true;
   }
 }
-
 // ---------- Roll flow with Luck reroll ----------
 async function triggerRoll(skill){
   if(!state.rollPending){
