@@ -788,9 +788,12 @@ function handleCommand(raw){
     return true;
   }
 
-  const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
-  const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
-  const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+  const m = raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i);
+  if (!m) return false;
+
+  const cmd = m[1].toLowerCase();
+  const argN = m[2] != null ? parseInt(m[2],10) : null;
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
   // *addstatus drunk* / *removestatus drunk*
   const mStatus = raw.match(/^\*(addstatus|removestatus)\s+(.+)\*$/i);
@@ -812,7 +815,7 @@ function handleCommand(raw){
     return true;
   }
 
-  switch(cmd){
+  switch (cmd) {
     // NEW: *promptadditem*  -> ask AI to propose 1 item via inventory_proposal (no narration)
     case "promptadditem": {
       postDock("system", "Requesting loot proposal…");
@@ -842,14 +845,47 @@ function handleCommand(raw){
       return true;
     }
 
+    // NEW: *debugloot*  -> local test of loot UI (no AI)
+    case "debugloot": {
+      const fake = {
+        add: [{ name: "Compact Toolkit", qty: 1, matches: ["tech","crafting"], why: "baseline field repairs" }]
+      };
+      showLootPrompt(fake);
+      postDock("system", "Debug loot proposed.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Debug loot proposed."));
+      return true;
+    }
+
+    // NEW: *additem*  -> quick manual add (no AI)
+    case "additem": {
+      const name = prompt("Item name?", "Medkit");
+      if (!name) { postDock("system","Cancelled."); return true; }
+      const traits = (prompt("Comma-separated traits (e.g., survival,crafting)", "survival") || "")
+                      .split(",").map(s=>s.trim()).filter(Boolean);
+      const ok = addItemToState({ name, qty: 1, matches: traits });
+      if (ok) {
+        renderInv();
+        savePcSnapshot();
+        postDock("system", `Added "${name}" to inventory.`);
+        ensureCampaignDoc().then(()=> saveTurn("system", `Added item "${name}"`));
+      } else {
+        postDock("system", `Could not add item.`);
+      }
+      return true;
+    }
+
     case "addluck":
       state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
+
     case "removeluck":
       state.pc.luck = Math.max(0, state.pc.luck - 1); renderHealth(); postDock("system",`Luck -1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck -1`)); return true;
+
     case "addwound":
       state.pc.wounds = clamp(state.pc.wounds + 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound +1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound +1`)); return true;
+
     case "removewound":
       state.pc.wounds = clamp(state.pc.wounds - 1, 0, HEARTS_MAX); renderHealth(); postDock("system",`Wound -1 → ${state.pc.wounds}/${HEARTS_MAX}`); ensureCampaignDoc().then(()=> saveTurn("system",`Wound -1`)); return true;
+
     case "addxp": {
       const n = Number.isFinite(argN) ? argN : 1;
       state.pc.xp = Math.max(0, state.pc.xp + n);
@@ -860,12 +896,14 @@ function handleCommand(raw){
       ensureCampaignDoc().then(()=> saveTurn("system", msg));
       return true;
     }
+
     case "newsession":
       state.pc.luck = RULES?.luck?.start ?? 1;
       postDock("system",`New session: Luck reset to ${state.pc.luck}.`);
       ensureCampaignDoc().then(()=> saveTurn("system",`New session: Luck ${state.pc.luck}`));
       renderHealth();
       return true;
+
     case "togglerolling":
       state.testRolling = !state.testRolling;
       if(state.testRolling){
@@ -878,10 +916,12 @@ function handleCommand(raw){
         postDock('system','Test rolling: OFF');
       }
       return true;
+
     case "summary":
       postDock("system", state.storySummary || "(no summary yet)");
       ensureCampaignDoc().then(()=> saveTurn("system","(requested summary)"));
       return true;
+
     default:
       postDock("system",`Unknown command: ${cmd}`);
       ensureCampaignDoc().then(()=> saveTurn("system",`Unknown command: ${cmd}`));
