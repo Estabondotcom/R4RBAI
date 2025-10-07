@@ -1216,11 +1216,11 @@ async function aiTurnHandler(payload){
     }
 
     const restJoined = rest.join('\n');
-    const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
-    if(narrative){
-      appendToBook(narrative);
-      ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
-    }
+const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
+if (narrative && !(payload?.meta?.suppressNarrative)) {
+  appendToBook(narrative);
+  ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
+}
   }catch(err){
     console.error(err);
     postDock('system', 'AI request failed.');
