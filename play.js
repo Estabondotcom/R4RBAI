@@ -21,7 +21,8 @@ const state = {
   pendingReroll: null,
   storySummary: "",        // rolling recap the AI can read
   isReplayingHistory: false,
-  pendingLoot: null        // ✨ NEW: holds proposed items awaiting player choice
+  pendingLoot: null,       // holds proposed items awaiting player choice
+  hintLoot: false          // one-shot hint to AI that loot proposal is welcome
 };
 
 // ---------- DOM refs ----------
@@ -32,8 +33,8 @@ const scrollLock = document.getElementById("scrollLock");
 
 // ---------- AI Config ----------
 const USE_AI = true;
-// Your deployed AI endpoint (use the Firebase Function so prompt rules apply):
-const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn"; // ✨ NEW
+// point to your Cloud Function so prompt rules apply:
+const AI_URL = "https://us-central1-r4rbai.cloudfunctions.net/aiTurn";
 
 async function callAiTurn(payload){
   const res = await fetch(AI_URL, {
@@ -91,7 +92,7 @@ function buildCampaignCard(){
   };
 }
 
-// ---------- Firestore / Firebase ----------
+// ---------- Firebase ----------
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
   getFirestore, doc, getDoc,
@@ -112,7 +113,7 @@ const fbApp = getApps().length ? getApps()[0] : initializeApp({
 const db = getFirestore(fbApp);
 const auth = getAuth(fbApp);
 
-// ---------- Firestore helpers (campaign + turns) ----------
+// ---------- Firestore helpers ----------
 function campaignDocRef() {
   const id = state.campaign?.id || state.campaignId;
   return doc(db, "campaigns", id);
@@ -132,7 +133,7 @@ async function ensureCampaignDoc() {
     }, { merge: true });
   }
 }
-// Save the current PC (including skills) and inventory into the campaign doc
+
 async function savePcSnapshot(extra = {}) {
   const ref = campaignDocRef();
   const pc = {
@@ -159,6 +160,7 @@ async function savePcSnapshot(extra = {}) {
 
   await setDoc(ref, { pc, inv, updatedAt: serverTimestamp(), ...extra }, { merge: true });
 }
+
 async function saveTurn(role, text, extras = {}) {
   if (!state.campaign?.id && !state.campaignId) return;
   const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
@@ -169,11 +171,10 @@ async function saveTurn(role, text, extras = {}) {
     createdAtMs: Date.now(),
     createdAt: serverTimestamp()
   });
-  // consider refreshing the rolling summary
   maybeUpdateStorySummary();
 }
 
-// returns count of turns loaded (replay history without animation, in strict order)
+// ---------- Load turns (no animation) ----------
 async function loadTurnsAndRender() {
   if (!state.campaign?.id && !state.campaignId) return 0;
   state.isReplayingHistory = true;
@@ -181,7 +182,6 @@ async function loadTurnsAndRender() {
   const ref = collection(db, "campaigns", state.campaign?.id || state.campaignId, "turns");
   const snap = await getDocs(ref);
 
-  // Build array and sort by our stable keys
   const turns = [];
   snap.forEach(docSnap => {
     const t = docSnap.data() || {};
@@ -191,7 +191,6 @@ async function loadTurnsAndRender() {
   });
   turns.sort((a,b) => a.ms - b.ms);
 
-  // Clear UI, then replay WITHOUT animation
   bookEl.innerHTML = "";
   dockEl.innerHTML = "";
 
@@ -206,7 +205,7 @@ async function loadTurnsAndRender() {
         postDock("dm", t.text);
         break;
       case "dm":
-        appendToBookImmediate(t.text);   // no typing on history
+        appendToBookImmediate(t.text);
         break;
       case "system":
       case "roll":
@@ -219,13 +218,11 @@ async function loadTurnsAndRender() {
   return count;
 }
 
-// Get the last N turns and return as [{role, text}] oldest→newest
+// ---------- Recent turns for AI ----------
 async function getRecentTurnsForAI(n = 8) {
   const id = state.campaign?.id || state.campaignId;
   if (!id) return [];
   const ref = collection(db, "campaigns", id, "turns");
-
-  // newest-first by client millis, then reverse
   const q = query(ref, orderBy("createdAtMs", "desc"), limit(n));
   const snap = await getDocs(q);
 
@@ -239,12 +236,12 @@ async function getRecentTurnsForAI(n = 8) {
   return buf.reverse();
 }
 
-// rolling story summary (recap every ~10 saved turns)
+// ---------- Story summary ----------
 const SUMMARY_EVERY_N_TURNS = 10;
 let _turnsSinceSummary = 0;
 
 async function maybeUpdateStorySummary() {
-  if (state.isReplayingHistory) return; // never summarize during history load
+  if (state.isReplayingHistory) return;
   _turnsSinceSummary++;
   if (_turnsSinceSummary < SUMMARY_EVERY_N_TURNS) return;
 
@@ -289,7 +286,7 @@ async function maybeUpdateStorySummary() {
   ensureCampaignDoc().then(()=> saveTurn("system", "Story summary updated."));
 }
 
-// ---------- Rules loading/compilation ----------
+// ---------- Rules ----------
 let RULES = null;
 
 function defaultRules(){
@@ -325,7 +322,7 @@ async function loadRules(){
   }
 }
 
-// Strip code fences/OOC and extract the first complete JSON object
+// ---------- Utils ----------
 function extractFirstJsonObject(str){
   if (!str) return "";
   str = str.replace(/```json\s*([\s\S]*?)\s*```/gi, "$1")
@@ -345,93 +342,38 @@ function extractFirstJsonObject(str){
   }
   return "";
 }
-
 function diceForLevel(level){
   const map = (RULES && RULES.dice_by_level) || {1:2,2:3,3:4,4:5};
   const n = map[level] ?? (level+1);
   return Math.max(1, Math.min(6, n));
 }
 function xpCostToNext(level){ return RULES?.xp_cost_next?.[level] ?? (level >= 4 ? 5 : (level + 1)); }
-
-// Traits helpers
-function skillTraits(skill){
-  return Array.isArray(skill.traits) ? skill.traits.map(t=>String(t).toLowerCase()) : [];
+function skillTraits(skill){ return Array.isArray(skill.traits) ? skill.traits.map(t=>String(t).toLowerCase()) : []; }
+function isAllowedTrait(t){ return TRAIT_SET_LOWER.has(String(t).toLowerCase()); }
+function sanitizeTraitList(arr, max=2){
+  const out = []; const seen = new Set();
+  for (const raw of (Array.isArray(arr) ? arr : [])) {
+    const t = String(raw).toLowerCase();
+    if (TRAIT_SET_LOWER.has(t) && !seen.has(t)) {
+      out.push(t); seen.add(t); if (out.length >= max) break;
+    }
+  }
+  return out;
 }
-
-function computeModsForSkill(skill){
-  let mod = 0;
-  const details = [];
-  const traits = skillTraits(skill);
-
-  // Wounds penalty
-  if (RULES?.wounds && state.pc.wounds >= (RULES.wounds.penalty_at_or_above ?? 2)) {
-    const v = RULES.wounds.penalty_value ?? -3;
-    mod += v; details.push(`wounds ${v}`);
-  }
-
-  // Status effects via RULES.statuses
-  for (const s of (state.pc.statuses || [])) {
-    const defs = RULES.statuses?.[String(s).toLowerCase()];
-    if (!defs) continue;
-    for (const [tag,val] of Object.entries(defs)) {
-      if (traits.includes(tag.toLowerCase())) { mod += val; details.push(`${s} ${val}`); }
-    }
-  }
-
-  // Item bonuses via RULES.items and item.matches tags (+1 each match)
-  for (const it of (state.inv || [])) {
-    const qty = it.qty || 1;
-    const defs = RULES.items?.[String(it.name||"").toLowerCase()];
-    if (defs) {
-      for (const [tag,val] of Object.entries(defs)) {
-        if (traits.includes(tag.toLowerCase())) { mod += (val * qty); details.push(`${it.name} ${val*qty}`); }
-      }
-    }
-    if (Array.isArray(it.matches) && it.matches.length) {
-      for (const tag of it.matches) {
-        if (traits.includes(String(tag).toLowerCase())) { mod += 1; details.push(`${it.name} +1`); }
-      }
-    }
-  }
-
-  return { mod, details };
-}
-
 function d6(){ return Math.floor(Math.random()*6)+1; }
-// ---------- Trait pool (authoritative) ----------
+
+// ---------- Trait pool ----------
 const TRAIT_POOL = [
   "Acrobatics","Agility","Aim","Athletics","Charm","Climb","Combat","Constitution","Crafting",
   "Deception","Endurance","Exploration","Explosive","Flashy","Focus","Improv","Insight","Intimidate",
   "Logic","Loud","Magic","Memory","Occult","Perception","Performance","Persuasion","Reflex","Religion",
   "Social","Stealth","Survival","Swim","Tactics","Tech","Violent"
 ];
-
-// Lowercased set for quick membership checks, but we keep UI labels capitalized.
 const TRAIT_SET_LOWER = new Set(TRAIT_POOL.map(t => t.toLowerCase()));
 
-function isAllowedTrait(t){
-  return TRAIT_SET_LOWER.has(String(t).toLowerCase());
-}
-
-// Normalize -> lowercase, filter to allowed, unique, and cap to N (default 2)
-function sanitizeTraitList(arr, max=2){
-  const out = [];
-  const seen = new Set();
-  for (const raw of (Array.isArray(arr) ? arr : [])) {
-    const t = String(raw).toLowerCase();
-    if (TRAIT_SET_LOWER.has(t) && !seen.has(t)) {
-      out.push(t);
-      seen.add(t);
-      if (out.length >= max) break;
-    }
-  }
-  return out;
-}
-
-// ---------- Trait Picker Modal Helper ----------
+// ---------- Trait Picker Modal ----------
 async function openTraitPicker({ title = "Choose Traits", max = 2 } = {}) {
   return new Promise((resolve) => {
-    // Create overlay
     const overlay = document.createElement("div");
     overlay.className = "trait-picker-overlay";
     overlay.innerHTML = `
@@ -472,6 +414,7 @@ async function openTraitPicker({ title = "Choose Traits", max = 2 } = {}) {
   });
 }
 
+// ---------- Skills helpers ----------
 function ensureDoAnything(){
   if (!state.pc.skills.some(s => s.name === "Do Anything")) {
     state.pc.skills.unshift({ name: "Do Anything", tier: 1, traits: ["improv"] });
@@ -488,11 +431,8 @@ async function levelUpSkill(skill){
     skill.tier += 1;
     postDock("system", `${skill.name} leveled up to Level ${skill.tier}.`);
     ensureCampaignDoc().then(()=> saveTurn("system", `${skill.name} leveled to ${skill.tier}`));
-
-    // ✨ persist the updated PC (including skills)
     await savePcSnapshot();
   } else {
-    // unlock specialization
     const base = skill.name.replace(/\s*\(Spec.*\)$/,'');
     const specName = prompt(
       `Create a specialization for "${base}" (e.g., "${base}: Rooftop Parkour")`,
@@ -502,8 +442,6 @@ async function levelUpSkill(skill){
     state.pc.skills.push({ name: specName, tier: 1, traits: skillTraits(skill) });
     postDock("system", `Unlocked specialization: ${specName} (Level 1).`);
     ensureCampaignDoc().then(()=> saveTurn("system", `Unlocked specialization: ${specName}`));
-
-    // ✨ persist with the new specialization added
     await savePcSnapshot();
   }
 
@@ -520,11 +458,10 @@ async function maybeCreateNewSkillFromDoAnything(){
     return;
   }
 
-  // Open the picker (choose up to 2 traits from the pool)
   const picked = await openTraitPicker({ title: `Choose traits for "${name}"`, max: 2 });
   if (!picked) { postDock("system", "Cancelled skill creation."); return; }
 
-  const traits = sanitizeTraitList(picked, 2); // lowercase + validated
+  const traits = sanitizeTraitList(picked, 2);
   if (traits.length === 0) {
     postDock("system", "No valid traits selected; skill not created.");
     return;
@@ -533,7 +470,6 @@ async function maybeCreateNewSkillFromDoAnything(){
   state.pc.skills.push({ name, tier: 1, traits });
   postDock("system", `New skill created: ${name} (Level 1) — traits: ${traits.join(", ") || "—"}.`);
   ensureCampaignDoc().then(()=> saveTurn("system", `New skill created: ${name} (L1) traits=${traits.join(", ")||"—"}`));
-
   renderSkills();
   await savePcSnapshot();
 }
@@ -583,28 +519,19 @@ function renderSkills(){
       <div class="skillActions"></div>
     `;
 
-    // Roll handler
     row.querySelector(".skillRollBtn")?.addEventListener("click", () => {
       triggerRoll(s);
     });
 
-    // Actions (level up / specialize)
     const actions = row.querySelector(".skillActions");
     if (isDoAnything) {
       actions.innerHTML = `<button type="button" class="btn-soft tiny" disabled title="Cannot level Do Anything">Locked</button>`;
     } else if (level < 4) {
       actions.innerHTML = `
-        <button
-          type="button"
-          class="btn-soft tiny"
-          data-levelup
-          ${enoughXP ? "" : "disabled"}
-          title="${enoughXP ? `Spend ${cost} XP to reach Level ${level+1}` : `Need ${cost} XP`}"
-        >
+        <button type="button" class="btn-soft tiny" data-levelup ${enoughXP ? "" : "disabled"}
+          title="${enoughXP ? `Spend ${cost} XP to reach Level ${level+1}` : `Need ${cost} XP`}">
           Level Up (${cost} XP)
-        </button>
-      `;
-
+        </button>`;
       const btn = actions.querySelector("[data-levelup]");
       btn && btn.addEventListener("click", async () => {
         const need = xpCostToNext(s.tier);
@@ -613,29 +540,18 @@ function renderSkills(){
           ensureCampaignDoc().then(() => saveTurn("system", `Insufficient XP to level ${s.name}`));
           return;
         }
-        // prevent double-click
         btn.disabled = true;
-
         state.pc.xp -= need;
-        await levelUpSkill(s);     // async; persists via savePcSnapshot() inside
+        await levelUpSkill(s);
         renderHealth();
         renderSkills();
       });
-
     } else {
-      // level >= 4 → Specialization
       actions.innerHTML = `
-        <button
-          type="button"
-          class="btn-soft tiny"
-          data-special
-          ${enoughXP ? "" : "disabled"}
-          title="${enoughXP ? `Spend ${cost} XP to unlock a specialization` : `Need ${cost} XP`}"
-        >
+        <button type="button" class="btn-soft tiny" data-special ${enoughXP ? "" : "disabled"}
+          title="${enoughXP ? `Spend ${cost} XP to unlock a specialization` : `Need ${cost} XP`}">
           Specialize (${cost} XP)
-        </button>
-      `;
-
+        </button>`;
       const btn = actions.querySelector("[data-special]");
       btn && btn.addEventListener("click", async () => {
         const need = xpCostToNext(s.tier);
@@ -645,9 +561,8 @@ function renderSkills(){
           return;
         }
         btn.disabled = true;
-
         state.pc.xp -= need;
-        await levelUpSkill(s);     // async; persists via savePcSnapshot() inside
+        await levelUpSkill(s);
         renderHealth();
         renderSkills();
       });
@@ -760,11 +675,37 @@ function postDock(role,text){
 }
 function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
 
-// ---------- Commands ----------
+// ---------- Commands (with promptadditem, ooc-, debugloot, additem) ----------
 function handleCommand(raw){
-  const m=raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i); if(!m) return false;
-  const cmd=m[1].toLowerCase(); const argN=m[2]!=null?parseInt(m[2],10):null;
-  const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+  // *ooc- ...*  -> force an OOC-only response (no narration)
+  const mOOC = raw.match(/^\*ooc-\s*(.+)\*$/i);
+  if (mOOC) {
+    const oocText = mOOC[1].trim();
+    postDock("you", `(OOC) ${oocText}`);
+    ensureCampaignDoc().then(()=> saveTurn("you", `(OOC) ${oocText}`));
+    (async () => {
+      const recent = await getRecentTurnsForAI(6);
+      aiTurnHandler({
+        recent_turns: recent,
+        story_summary: state.storySummary || "",
+        player_input: [
+          "Respond ONLY with the first-line OOC JSON.",
+          "Set need_roll=false unless a roll is truly required.",
+          `Use this OOC prompt text: ${oocText}`,
+          "Do NOT include NARRATIVE."
+        ].join("\n"),
+        meta: { suppressNarrative: true }
+      });
+    })();
+    return true;
+  }
+
+  const m = raw.match(/^\*(\w+)(?:\s+(-?\d+))?\*$/i);
+  if (!m) return false;
+
+  const cmd = m[1].toLowerCase();
+  const argN = m[2] != null ? parseInt(m[2],10) : null;
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
   // *addstatus drunk* / *removestatus drunk*
   const mStatus = raw.match(/^\*(addstatus|removestatus)\s+(.+)\*$/i);
@@ -786,7 +727,62 @@ function handleCommand(raw){
     return true;
   }
 
-  switch(cmd){
+  switch (cmd) {
+    // *promptadditem*  -> ask AI to propose 1 item via inventory_proposal (no narration)
+    case "promptadditem": {
+      postDock("system", "Requesting loot proposal…");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Requested loot proposal."));
+      const allowedListCsv = TRAIT_POOL.join(", ");
+      (async () => {
+        const recent = await getRecentTurnsForAI(6);
+        aiTurnHandler({
+          recent_turns: recent,
+          story_summary: state.storySummary || "",
+          player_input: [
+            "Propose EXACTLY 1 item using inventory_proposal.add.",
+            "Include fields: name, qty (1), matches (1–2 from the allowed list), and a short 'why'.",
+            "Use the OOC 'prompt' to ask the player if they want it.",
+            "Do NOT auto-add items; no 'inventory' block—proposal only.",
+            "Return ONLY the first-line OOC JSON; omit NARRATIVE.",
+            "",
+            "Allowed traits:",
+            allowedListCsv
+          ].join("\n"),
+          meta: { suppressNarrative: true }
+        });
+      })();
+      return true;
+    }
+
+    // *debugloot*  -> local test of loot UI (no AI)
+    case "debugloot": {
+      const fake = {
+        add: [{ name: "Compact Toolkit", qty: 1, matches: ["tech","crafting"], why: "baseline field repairs" }]
+      };
+      showLootPrompt(fake);
+      postDock("system", "Debug loot proposed.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Debug loot proposed."));
+      return true;
+    }
+
+    // *additem*  -> quick manual add (no AI)
+    case "additem": {
+      const name = prompt("Item name?", "Medkit");
+      if (!name) { postDock("system","Cancelled."); return true; }
+      const traits = (prompt("Comma-separated traits (e.g., survival,crafting)", "survival") || "")
+                      .split(",").map(s=>s.trim()).filter(Boolean);
+      const ok = addItemToState({ name, qty: 1, matches: traits });
+      if (ok) {
+        renderInv();
+        savePcSnapshot();
+        postDock("system", `Added "${name}" to inventory.`);
+        ensureCampaignDoc().then(()=> saveTurn("system", `Added item "${name}"`));
+      } else {
+        postDock("system", `Could not add item.`);
+      }
+      return true;
+    }
+
     case "addluck":
       state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
     case "removeluck":
@@ -835,6 +831,45 @@ function handleCommand(raw){
 }
 
 // ---------- Roll flow with Luck reroll ----------
+function computeModsForSkill(skill){
+  let mod = 0;
+  const details = [];
+  const traits = skillTraits(skill);
+
+  // Wounds penalty
+  if (RULES?.wounds && state.pc.wounds >= (RULES.wounds.penalty_at_or_above ?? 2)) {
+    const v = RULES.wounds.penalty_value ?? -3;
+    mod += v; details.push(`wounds ${v}`);
+  }
+
+  // Status effects
+  for (const s of (state.pc.statuses || [])) {
+    const defs = RULES.statuses?.[String(s).toLowerCase()];
+    if (!defs) continue;
+    for (const [tag,val] of Object.entries(defs)) {
+      if (traits.includes(tag.toLowerCase())) { mod += val; details.push(`${s} ${val}`); }
+    }
+  }
+
+  // Items
+  for (const it of (state.inv || [])) {
+    const qty = it.qty || 1;
+    const defs = RULES.items?.[String(it.name||"").toLowerCase()];
+    if (defs) {
+      for (const [tag,val] of Object.entries(defs)) {
+        if (traits.includes(tag.toLowerCase())) { mod += (val * qty); details.push(`${it.name} ${val*qty}`); }
+      }
+    }
+    if (Array.isArray(it.matches) && it.matches.length) {
+      for (const tag of it.matches) {
+        if (traits.includes(String(tag).toLowerCase())) { mod += 1; details.push(`${it.name} +1`); }
+      }
+    }
+  }
+
+  return { mod, details };
+}
+
 async function triggerRoll(skill){
   if(!state.rollPending){
     postDock("system","No roll requested right now.");
@@ -914,14 +949,9 @@ async function triggerRoll(skill){
   controls.className = "roll-controls";
   controls.innerHTML = `
     <div class="row gap-8">
-      <button type="button" class="btn-soft tiny btn-reroll-lowest" data-action="reroll-lowest">
-        Reroll Lowest (1 Luck)
-      </button>
-      <button type="button" class="btn-soft tiny btn-resolve" data-action="resolve">
-        Resolve
-      </button>
-    </div>
-  `;
+      <button type="button" class="btn-soft tiny btn-reroll-lowest" data-action="reroll-lowest">Reroll Lowest (1 Luck)</button>
+      <button type="button" class="btn-soft tiny btn-resolve" data-action="resolve">Resolve</button>
+    </div>`;
   msg.appendChild(controls);
 
   if(initialAllSixes){
@@ -998,31 +1028,35 @@ async function finalizeRoll(wasReroll, providedRollObj){
 
   if(payload){
     const recent = await getRecentTurnsForAI(8);
-    aiTurnHandler({
+
+    // one-shot hint after strong outcomes
+    if (payload.tierResult === "crit" || payload.tierResult === "success") {
+      state.hintLoot = true;
+    }
+
+    await aiTurnHandler({
       player_input: wasReroll ? "Resolve the action (after luck reroll)." : "Resolve the action.",
       mechanics: { roll_result: payload },
       recent_turns: recent,
-      story_summary: state.storySummary || ""
+      story_summary: state.storySummary || "",
+      hints: { want_inventory_proposal: !!state.hintLoot },
+      allowed_traits: TRAIT_POOL
     });
+
+    state.hintLoot = false; // clear one-shot
   }
   state.pendingReroll = null;
 }
 
-// Delegated handler for dynamic roll buttons (use classes)
+// Delegated roll-control buttons
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".btn-reroll-lowest, .btn-resolve");
   if (!btn) return;
-
-  // prevent accidental double-fires
   if (btn.dataset.busy === "1") return;
   btn.dataset.busy = "1";
-
   try {
-    if (btn.matches(".btn-reroll-lowest")) {
-      doLuckReroll();
-    } else if (btn.matches(".btn-resolve")) {
-      finalizeRoll(false);
-    }
+    if (btn.matches(".btn-reroll-lowest")) doLuckReroll();
+    else if (btn.matches(".btn-resolve")) finalizeRoll(false);
   } catch (err) {
     console.error("resolve/reroll error:", err);
     alert("That didn’t go through. Please try again.");
@@ -1033,10 +1067,10 @@ document.addEventListener("click", (e) => {
 
 // ---------- Loot helpers (proposal workflow) ----------
 // Merge item into state inventory safely
-function addItemToState({ name, qty = 1, matches = [] }) { // ✨ NEW
+function addItemToState({ name, qty = 1, matches = [] }) {
   name = String(name || "").trim().slice(0, 64);
   qty = Math.max(1, Math.min(3, Number(qty) || 1));
-  const traits = sanitizeTraitList(matches, 2); // validates against trait pool
+  const traits = sanitizeTraitList(matches, 2);
   if (!name) return false;
 
   const existing = state.inv.find(it => it.name.toLowerCase() === name.toLowerCase());
@@ -1050,7 +1084,7 @@ function addItemToState({ name, qty = 1, matches = [] }) { // ✨ NEW
 }
 
 // Show Accept/Decline UI in the dock
-function showLootPrompt(proposal) { // ✨ NEW
+function showLootPrompt(proposal) {
   const adds = Array.isArray(proposal?.add) ? proposal.add.slice(0,3) : [];
   if (!adds.length) return;
 
@@ -1072,37 +1106,40 @@ function showLootPrompt(proposal) { // ✨ NEW
     <div class="row gap-8">
       <button type="button" class="btn-soft tiny btn-loot-accept">Accept Loot</button>
       <button type="button" class="btn-soft tiny btn-loot-decline">Decline</button>
-    </div>
-  `;
+    </div>`;
   msg.appendChild(box);
 }
 
-// Delegated Accept/Decline handlers
-document.addEventListener("click", async (e) => { // ✨ NEW
-  const accept = e.target.closest(".btn-loot-accept");
-  const decline = e.target.closest(".btn-loot-decline");
-  if (!accept && !decline) return;
+// Delegated Accept/Decline (on dock and document)
+function wireLootAcceptDecline(root){
+  (root || document).addEventListener("click", async (e) => {
+    const accept = e.target.closest(".btn-loot-accept");
+    const decline = e.target.closest(".btn-loot-decline");
+    if (!accept && !decline) return;
 
-  if (accept) {
-    const items = Array.isArray(state.pendingLoot) ? state.pendingLoot : [];
-    let changed = false;
-    for (const it of items) changed = addItemToState(it) || changed;
-    state.pendingLoot = null;
+    if (accept) {
+      const items = Array.isArray(state.pendingLoot) ? state.pendingLoot : [];
+      let changed = false;
+      for (const it of items) changed = addItemToState(it) || changed;
+      state.pendingLoot = null;
 
-    if (changed) {
-      renderInv();
-      await savePcSnapshot();
-      postDock("system", "Loot accepted. Inventory updated.");
-      ensureCampaignDoc().then(()=> saveTurn("system", "Loot accepted (inventory updated)."));
-    } else {
-      postDock("system", "Nothing to add.");
+      if (changed) {
+        renderInv();
+        await savePcSnapshot();
+        postDock("system", "Loot accepted. Inventory updated.");
+        ensureCampaignDoc().then(()=> saveTurn("system", "Loot accepted (inventory updated)."));
+      } else {
+        postDock("system", "Nothing to add.");
+      }
+    } else if (decline) {
+      state.pendingLoot = null;
+      postDock("system", "Loot declined.");
+      ensureCampaignDoc().then(()=> saveTurn("system", "Loot declined."));
     }
-  } else if (decline) {
-    state.pendingLoot = null;
-    postDock("system", "Loot declined.");
-    ensureCampaignDoc().then(()=> saveTurn("system", "Loot declined."));
-  }
-}, { passive: true });
+  }, { passive: true });
+}
+wireLootAcceptDecline(document);
+if (dockEl) wireLootAcceptDecline(dockEl);
 
 // ---------- AI turn handler ----------
 async function aiTurnHandler(payload){
@@ -1123,7 +1160,6 @@ async function aiTurnHandler(payload){
 
     const [firstLine, ...rest] = text.split(/\r?\n/);
 
-    // Parse once, keep the whole object
     let firstObj = null;
     let ooc = null;
     try {
@@ -1135,14 +1171,26 @@ async function aiTurnHandler(payload){
       return;
     }
 
-    // ----- Loot proposals (NO auto-adding) -----
-    const invProposal =
+    // --- DEBUG + compatibility for old inventory format
+    console.debug("[AI] firstObj:", firstObj);
+    console.debug("[AI] ooc:", ooc);
+
+    let invProposal =
       ooc?.inventory_proposal ||
       ooc?.inventoryProposal ||
       firstObj?.inventory_proposal ||
       firstObj?.inventoryProposal;
+
+    const invOld = ooc?.inventory || firstObj?.inventory;
+    if (!invProposal && invOld && Array.isArray(invOld.add) && invOld.add.length) {
+      console.debug("[AI] found old-style inventory.add; converting to proposal");
+      invProposal = { add: invOld.add };
+    }
+
     if (invProposal) {
       showLootPrompt(invProposal);
+    } else {
+      console.debug("[AI] no inventory_proposal present.");
     }
     // -------------------------------------------
 
@@ -1163,7 +1211,7 @@ async function aiTurnHandler(payload){
 
     const restJoined = rest.join('\n');
     const narrative = restJoined.replace(/^[\s\r\n]*NARRATIVE:\s*/,'').trim();
-    if(narrative){
+    if (narrative && !(payload?.meta?.suppressNarrative)) {
       appendToBook(narrative);
       ensureCampaignDoc().then(()=> saveTurn("dm", narrative));
     }
@@ -1178,6 +1226,11 @@ async function aiTurnHandler(payload){
 function getQueryParam(name){
   const v = new URLSearchParams(location.search).get(name);
   return v ? decodeURIComponent(v) : null;
+}
+
+function campaignDocRef(){ // shadowed earlier, keep once
+  const id = state.campaign?.id || state.campaignId;
+  return doc(db, "campaigns", id);
 }
 
 // replace-not-merge hydration
@@ -1271,8 +1324,12 @@ document.getElementById("sendBtn").onclick = async ()=>{
     return;
   }
 
+  // hint: if the player's message implies search/loot/shop/reward
+  const wantsLoot = /\b(loot|search|scavenge|forage|rummage|open chest|open crate|open locker|quartermaster|armory|shop|merchant|vendor|reward|salvage|stash|cache)\b/i.test(v);
+  if (wantsLoot) state.hintLoot = true;
+
   const recent = await getRecentTurnsForAI(8);
-  aiTurnHandler({
+  await aiTurnHandler({
     recent_turns: recent,
     story_summary: state.storySummary || "",
     mechanics: {
@@ -1282,12 +1339,15 @@ document.getElementById("sendBtn").onclick = async ()=>{
         difficulty_scale: RULES?.difficulty_scale || []
       }
     },
-    player_input: v + "\n\n(Use only the provided campaign_card and state_summary.)"
+    player_input: v + "\n\n(Use only the provided campaign_card and state_summary.)",
+    hints: { want_inventory_proposal: !!state.hintLoot },
+    allowed_traits: TRAIT_POOL
   });
+  state.hintLoot = false; // one-shot clear
 };
 input.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('sendBtn').click(); } });
 
-// ---------- Starter Kit (strict; no fallbacks) ----------
+// ---------- Starter Kit ----------
 async function maybeGenerateStarterKit(){
   ensureDoAnything();
 
@@ -1351,13 +1411,11 @@ async function maybeGenerateStarterKit(){
     return false;
   }
 
-  // Strict validation: traits MUST be from allowed pool (case-insensitive), 1–2 each
   function allTraitsValid(arr){
     if (!Array.isArray(arr) || arr.length < 1 || arr.length > 2) return false;
     return arr.every(t => isAllowedTrait(t));
   }
 
-  // Validate + sanitize to lowercase storage
   for (const s of skillsIn) {
     if (!s || !s.name || !allTraitsValid(s.traits)) {
       postDock("system", "Starter kit invalid; traits must be chosen from allowed list.");
@@ -1376,12 +1434,12 @@ async function maybeGenerateStarterKit(){
   const skills = skillsIn.map(s => ({
     name: String(s.name || "").slice(0,64),
     tier: 1,
-    traits: sanitizeTraitList(s.traits, 2) // lowercase, filtered
+    traits: sanitizeTraitList(s.traits, 2)
   }));
   const items  = itemsIn.map(it => ({
     name: String(it.name || "").slice(0,64),
     qty: Math.max(1, Number(it.qty || 1)),
-    matches: sanitizeTraitList(it.matches, 2) // lowercase, filtered
+    matches: sanitizeTraitList(it.matches, 2)
   }));
 
   if (needSkills) {
@@ -1419,41 +1477,32 @@ async function ensureSignedIn() {
 }
 
 window.addEventListener('load', async ()=>{
-  // cute tray peek
   setTimeout(()=>{ document.getElementById('tray').classList.add('open');
     setTimeout(()=>document.getElementById('tray').classList.remove('open'), 1200);
   }, 400);
 
-  // 0) Load rules
   await loadRules();
 
-  // 1) Auth
   try { await ensureSignedIn(); }
   catch (e) { postDock("system","Login failed or cancelled."); return; }
 
-  // 2) Hydrate by ?cid=...
   const ok = await hydrateFromFirestoreByCid();
-
-  // 2.5) One-time starter kit if missing
   await maybeGenerateStarterKit();
 
-  // 2.7) Load saved turns (replay) and skip kickoff if history exists
   await ensureCampaignDoc();
   const turnCount = await loadTurnsAndRender();
 
-  // 3) Luck baseline
   const startLuck = RULES?.luck?.start ?? 1;
   if (typeof state.pc.luck !== 'number' || state.pc.luck < startLuck) {
     state.pc.luck = startLuck;
     renderHealth();
   }
 
-  // 4) Test mode guard
   if(state.testRolling){
     postDock('system','(Test mode) Ready. Use *togglerolling* to exit test mode.');
     return;
   }
-  // 5) AI kickoff ONLY if no prior turns (fresh campaign)
+
   if (turnCount === 0) {
     aiTurnHandler({
       kickoff: true,
