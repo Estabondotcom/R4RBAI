@@ -25,7 +25,7 @@ export const deleteCampaign = onCall(async (request) => {
   if (!snap.exists) return { ok: true, message: "Not found (already deleted)" };
 
   const data = snap.data();
-  if (data.uid && data.uid !== uid)
+  if (data?.uid && data.uid !== uid)
     throw new HttpsError("permission-denied", "Not your campaign.");
 
   await admin.firestore().recursiveDelete(ref);
@@ -44,12 +44,16 @@ export const aiTurn = onRequest({ secrets: ["OPENAI_API_KEY"] }, (req, res) => {
       res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
       return res.status(204).send("");
     }
-    if (req.method !== "POST") return res.status(405).send("POST only");
+    if (req.method !== "POST") {
+      res.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+      return res.status(405).send("POST only");
+    }
 
     try {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const body = req.body || {};
 
+      // ★ change: updated system prompt to use inventory_proposal (proposal, not auto-add)
       const system = `You are the AI GM for "Roll for Rocket Boots".
 Reply in two parts:
 1) First line: {"ooc":{"need_roll":true|false,"skill":"<Skill>","dieTier":1..4,"difficulty":8..24,"note":"optional","prompt":"optional"}}
@@ -57,7 +61,7 @@ Reply in two parts:
 
 Rules:
 - NARRATIVE MUST be written in THIRD PERSON. Refer to the player character by name or “they,” never “you.”
-- Keep tense consistent and immersive, avoiding imperative phrasing (no "you see," "you feel," etc.).
+- Keep tense consistent and immersive; avoid imperative phrasing (no "you see," "you feel," etc.).
 - Do NOT roll dice; the client handles mechanics.
 - If mechanics.roll_result is provided, set need_roll=false and narrate the outcome.
 - Maintain story continuity with state_summary and recent_turns.
@@ -66,21 +70,19 @@ Skill usage constraints:
 - Do NOT make up new skills.
 - Only call for rolls using skills the player currently has in state_summary.pc.skills.
 - Do NOT call for rolls for traits, items, or narrative abilities alone.
-- If no listed skill logically fits the situation, call for a roll using the skill **"Do Anything"**.
+- If no listed skill logically fits the situation, call for a roll using the skill "Do Anything".
 - Use "Do Anything" only as a fallback when no existing skill reasonably applies.
 - If even "Do Anything" would be redundant, resolve narratively instead of requesting a roll.
 
-Inventory updates:
-- If granting or removing items, include an OOC object in the FIRST LINE JSON under "inventory".
+Inventory proposals (do NOT auto-add items):
+- If offering items, include an "inventory_proposal" object in the FIRST LINE JSON.
 - STRICT schema:
-  "inventory": {
-    "add": [{"name":"", "qty":1, "matches":["trait1","trait2"]}],
-    "remove": [{"name":"", "qty":1}]
+  "inventory_proposal": {
+    "add": [{"name":"", "qty":1, "matches":["trait1","trait2"], "why":"short reason"}]
   }
-- "matches" traits MUST come only from state_summary.pc.traits or the allowed trait pool provided by the client.
-- Never invent trait names outside that allowed list.
-- Never exceed 3 items per turn, qty 1–3 per item.
-- If no items are awarded/removed, omit "inventory".
+- Do not include "inventory" unless the player already accepted in a prior step (the client will handle that).
+- Names and "matches" must follow the allowed trait list the client enforces; never invent new trait names.
+- Max 3 items per proposal; each qty 1–3. Omit "inventory_proposal" if none are proposed.
 
 Behavior:
 - Stay within the tone of a lighthearted, narrative-driven tabletop RPG.
@@ -102,11 +104,11 @@ Behavior:
         `{"ooc":{"need_roll":false,"prompt":"What do you do?"}}\n\nNARRATIVE:\nThe scene waits.`;
 
       res.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
-      res.status(200).send({ text });
+      return res.status(200).send({ text });
     } catch (err) {
       console.error(err);
       res.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
-      res.status(500).send({ error: "aiTurn failed" });
+      return res.status(500).send({ error: "aiTurn failed" });
     }
   });
 });
