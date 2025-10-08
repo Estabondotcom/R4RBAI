@@ -1228,11 +1228,6 @@ function getQueryParam(name){
   return v ? decodeURIComponent(v) : null;
 }
 
-function campaignDocRef(){ // shadowed earlier, keep once
-  const id = state.campaign?.id || state.campaignId;
-  return doc(db, "campaigns", id);
-}
-
 // replace-not-merge hydration
 async function hydrateFromFirestoreByCid(){
   const cid = getQueryParam("cid");
