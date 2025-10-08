@@ -766,22 +766,41 @@ function handleCommand(raw){
     }
 
     // *additem*  -> quick manual add (no AI)
-    case "additem": {
-      const name = prompt("Item name?", "Medkit");
-      if (!name) { postDock("system","Cancelled."); return true; }
-      const traits = (prompt("Comma-separated traits (e.g., survival,crafting)", "survival") || "")
-                      .split(",").map(s=>s.trim()).filter(Boolean);
-      const ok = addItemToState({ name, qty: 1, matches: traits });
-      if (ok) {
-        renderInv();
-        savePcSnapshot();
-        postDock("system", `Added "${name}" to inventory.`);
-        ensureCampaignDoc().then(()=> saveTurn("system", `Added item "${name}"`));
-      } else {
-        postDock("system", `Could not add item.`);
-      }
-      return true;
+   case "additem": {
+  // Run async UI flow without making handleCommand async
+  (async () => {
+    const name = prompt("Item name?", "Medkit");
+    if (!name) { postDock("system","Cancelled."); return; }
+
+    // ✅ Use the same checkbox grid as skills
+    const picked = await openTraitPicker({
+      title: `Select traits for "${name}" (up to 2)`,
+      max: 2
+    });
+    if (picked === null) { postDock("system","Cancelled."); return; }
+
+    // Optional qty prompt (kept simple)
+    const qtyStr = prompt("Quantity? (1–3)", "1");
+    const qty = Math.max(1, Math.min(3, parseInt(qtyStr, 10) || 1));
+
+    const ok = addItemToState({
+      name,
+      qty,
+      matches: picked // will be sanitized by addItemToState → sanitizeTraitList
+    });
+
+    if (ok) {
+      renderInv();
+      await savePcSnapshot();
+      postDock("system", `Added "${name}" ×${qty} to inventory${picked?.length ? ` [${picked.join(", ")}]` : ""}.`);
+      ensureCampaignDoc().then(()=> saveTurn("system", `Added item "${name}" ×${qty}`));
+    } else {
+      postDock("system", `Could not add item.`);
     }
+  })();
+
+  return true;
+}
 
     case "addluck":
       state.pc.luck += 1; renderHealth(); postDock("system",`Luck +1 → ${state.pc.luck}`); ensureCampaignDoc().then(()=> saveTurn("system",`Luck +1`)); return true;
